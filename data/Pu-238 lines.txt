@@ -1,0 +1,3 @@
+Isotope	E (keV)	Intensity (%)
+Pu-238	5549,79	28,85
+Pu-238	5593,20	71,04
