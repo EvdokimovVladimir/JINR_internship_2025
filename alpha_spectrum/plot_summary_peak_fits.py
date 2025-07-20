@@ -3,6 +3,21 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import os
 
+# Словарь для пользовательских подписей пиков (индекс: подпись)
+peak_labels = {
+    0: "4684,41 кэВ",
+    1: "5407,45 кэВ",
+    2: "5590,3 кэВ",
+    3: "6114,68 кэВ",
+    4: "7833,46 кэВ",
+}
+
+def get_peak_label(peak_index):
+    """
+    Возвращает подпись для пика по индексу.
+    """
+    return peak_labels.get(peak_index, f"Peak {peak_index + 1}")
+
 def read_summary_peak_fits(filepath):
     """
     Reads the summary_peak_fits.txt file and parses its content into a list of dictionaries.
@@ -56,11 +71,14 @@ def plot_peak_positions_vs_voltage(data):
         voltages = [peak["Voltage (V)"] for peak in peaks]
         energies = [peak["Energy(keV)"] for peak in peaks]
         errors = [peak["ΔEnergy(keV)"] for peak in peaks]
-        plt.errorbar(voltages, energies, yerr=errors, marker='o', label=f"Peak {peak_index + 1}", capsize=3)
+        plt.errorbar(
+            voltages, energies, yerr=errors, marker='o',
+            label=get_peak_label(peak_index), capsize=3
+        )
 
-    plt.xlabel("Voltage (V)")
-    plt.ylabel("Energy (keV)")
-    plt.title("Peak Positions vs Voltage with Errors")
+    plt.xlabel("Напряжение (В)")
+    plt.ylabel("Энергия (кэВ)")
+    # plt.title("Измеренная энергия vs Напряжение")
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
@@ -87,11 +105,14 @@ def plot_normalized_peak_positions_vs_voltage(data):
         normalized_energies = [energy / max_energy for energy in energies]
         normalized_errors = [error / max_energy for error in errors]
         
-        plt.errorbar(voltages, normalized_energies, yerr=normalized_errors, marker='o', label=f"Peak {peak_index + 1}", capsize=3)
+        plt.errorbar(
+            voltages, normalized_energies, yerr=normalized_errors, marker='o',
+            label=get_peak_label(peak_index), capsize=3
+        )
 
-    plt.xlabel("Voltage (V)")
-    plt.ylabel("Normalized Energy")
-    plt.title("Normalized Peak Positions vs Voltage with Errors")
+    plt.xlabel("Напряжение (В)")
+    plt.ylabel("Нормированная измеренная энергия")
+    # plt.title("Нормированная измеренная энергия vs напряжение")
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
@@ -111,11 +132,14 @@ def plot_fwhm_vs_voltage(data):
         voltages = [peak["Voltage (V)"] for peak in peaks]
         fwhms = [peak["FWHM(keV)"] for peak in peaks]
         errors = [peak["ΔFWHM(keV)"] for peak in peaks]
-        plt.errorbar(voltages, fwhms, yerr=errors, marker='o', label=f"Peak {peak_index + 1}", capsize=3)
+        plt.errorbar(
+            voltages, fwhms, yerr=errors, marker='o',
+            label=get_peak_label(peak_index), capsize=3
+        )
 
-    plt.xlabel("Voltage (V)")
-    plt.ylabel("FWHM (keV)")
-    plt.title("FWHM vs Voltage with Errors")
+    plt.xlabel("Напряжение (В)")
+    plt.ylabel("ПШПВ (кэВ)")
+    # plt.title("ПШПВ vs напряжение")
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
@@ -135,11 +159,14 @@ def plot_amplitude_vs_voltage(data):
         voltages = [peak["Voltage (V)"] for peak in peaks]
         amplitudes = [peak["Amplitude"] for peak in peaks]
         errors = [peak["ΔAmplitude"] for peak in peaks]
-        plt.errorbar(voltages, amplitudes, yerr=errors, marker='o', label=f"Peak {peak_index + 1}", capsize=3)
+        plt.errorbar(
+            voltages, amplitudes, yerr=errors, marker='o',
+            label=get_peak_label(peak_index), capsize=3
+        )
 
-    plt.xlabel("Voltage (V)")
-    plt.ylabel("Amplitude")
-    plt.title("Amplitude vs Voltage with Errors")
+    plt.xlabel("Напряжение (В)")
+    plt.ylabel("Амплитуда пика")
+    # plt.title("Амплитуда пика vs напряжение")
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
@@ -163,9 +190,9 @@ def plot_current_vs_voltage(data):
         currents.append(peaks[0]["Current (nA)"])
 
     plt.plot(voltages, currents, marker='o', linestyle='-', label="Current vs Voltage")
-    plt.xlabel("Voltage (V)")
-    plt.ylabel("Current (nA)")
-    plt.title("Current vs Voltage")
+    plt.xlabel("Напряжение (В)")
+    plt.ylabel("Ток (нА)")
+    # plt.title("ВАХ")
     plt.grid(True)
     plt.tight_layout()
     results_dir = "./results"
@@ -174,7 +201,7 @@ def plot_current_vs_voltage(data):
     plt.close()  # Закрываем график после сохранения
 
 if __name__ == "__main__":
-    filepath = "/Users/vladimir.evdokimov/Yandex.Disk.localized/Физтех/2024-2025/ОИЯИ/Python/alpha_spectrum/results/summary_peak_fits.txt"
+    filepath = "results/summary_peak_fits.txt"
     data = read_summary_peak_fits(filepath)
     
     grouped_data = group_peaks_by_spectrum(data)

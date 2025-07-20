@@ -8,6 +8,7 @@ spectra_dir = "spectra"
 
 # Получаем список всех .txt файлов в папке spectra
 txt_files = [f for f in os.listdir(spectra_dir) if f.endswith('.txt')]
+txt_files.sort()  # Сортировка по алфавиту
 
 if not txt_files:
     print("Нет файлов .txt в папке spectra.")
