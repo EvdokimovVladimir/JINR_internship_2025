@@ -66,7 +66,7 @@ def calculate_fit_metrics(y_observed, y_fitted, n_params):
     }
 
 
-def analyze_beta_spectrum_simple(energy, counts, search_range_keV=(2000, 8000)):
+def analyze_beta_spectrum_simple(energy, counts, search_range_keV=(1000, 8000)):
     """
     Простой анализ бета-спектра без сложного фиттинга.
     Основан на анализе структуры данных.
@@ -121,7 +121,7 @@ def analyze_beta_spectrum_simple(energy, counts, search_range_keV=(2000, 8000)):
     # 7. Ищем где спектр спадает до уровня фона + статистическая флуктуация
     threshold = background_level + np.sqrt(background_level) * 2
     log(f"Порог для окончания бета-спектра: {threshold:.1f}")
-    
+
     # Начинаем поиск с места, где начинается бета-континуум
     start_search_idx = np.where(energy_region >= lower_boundary)[0]
     if len(start_search_idx) > 0:
@@ -132,18 +132,26 @@ def analyze_beta_spectrum_simple(energy, counts, search_range_keV=(2000, 8000)):
             end_idx = start_idx + np.where(below_threshold)[0][0]
             upper_boundary = energy_region[end_idx]
             log(f"Верхняя граница бета-спектра найдена: {upper_boundary:.1f} кэВ (индекс {end_idx})")
+            
+            # Адаптивное определение верхней границы
+            for i in range(end_idx, len(smoothed_counts) - 5):
+                local_window = smoothed_counts[i:i+5]
+                if np.all(np.abs(np.diff(local_window)) < 0.1 * np.mean(local_window)):
+                    upper_boundary = energy_region[i]
+                    log(f"Устойчивое плато определило новую верхнюю границу: {upper_boundary:.1f} кэВ (индекс {i})")
+                    break
         else:
             upper_boundary = energy_region[-1]
             log(f"Верхняя граница не найдена, fallback: {upper_boundary:.1f} кэВ")
     else:
         upper_boundary = energy_region[-1]
         log(f"Нет подходящего индекса для верхней границы, fallback: {upper_boundary:.1f} кэВ")
-    
+
     # 8. Проверяем разумность результатов
     if upper_boundary <= lower_boundary:
         upper_boundary = lower_boundary + 500
         log(f"Коррекция ширины бета-спектра: верхняя граница увеличена до {upper_boundary:.1f} кэВ")
-    
+
     print(f"Анализ: макс. шума на {energy_region[max_idx]:.1f} кэВ, фон = {background_level:.1f}")
     log(f"Анализ: макс. шума на {energy_region[max_idx]:.1f} кэВ, фон = {background_level:.1f}")
     return lower_boundary, upper_boundary, True
@@ -177,7 +185,40 @@ def extract_pure_alpha_spectrum(energy, counts, beta_lower, beta_upper, ref_cent
     return energy_alpha, counts_alpha, alpha_mask
 
 
-def find_and_fit_peaks(energy, counts_original, counts_smoothed, prominence_threshold=2, min_distance=20):
+def find_peaks_near_beta_boundary(energy, counts_smoothed, beta_upper, margin=300, height=0.5):
+    """
+    Поиск пиков вблизи верхней границы бета-спектра.
+    
+    Parameters:
+    energy: массив энергий
+    counts_smoothed: сглаженные данные
+    beta_upper: верхняя граница бета-спектра
+    margin: диапазон (в кэВ) для поиска пиков вокруг границы
+    height: минимальная высота пиков (опционально)
+    
+    Returns:
+    Список индексов найденных пиков.
+    """
+    log(f"Поиск пиков вблизи границы бета-спектра: {beta_upper} ± {margin} кэВ")
+    search_mask = (energy >= beta_upper - margin) & (energy <= beta_upper + margin)
+    search_region = counts_smoothed[search_mask]
+    search_energy = energy[search_mask]
+    
+    if len(search_region) == 0:
+        log("Область поиска пуста, пики не найдены")
+        return []
+    
+    # Дополнительное сглаживание для устранения шума
+    from scipy.ndimage import gaussian_filter1d
+    smoothed_region = gaussian_filter1d(search_region, sigma=3)
+    
+    from scipy.signal import find_peaks
+    peaks, _ = find_peaks(smoothed_region, prominence=0.1, height=height)  # Уменьшены пороги prominence и height
+    log(f"Найдено {len(peaks)} пиков вблизи границы")
+    
+    return [np.where(energy == search_energy[peak])[0][0] for peak in peaks]
+
+def find_and_fit_peaks(energy, counts_original, counts_smoothed, prominence_threshold=1, min_distance=20, beta_upper=None, height=None, manual_peak_ranges=None):
     """
     Поиск и фиттинг пиков в спектре.
     """
@@ -187,9 +228,30 @@ def find_and_fit_peaks(energy, counts_original, counts_smoothed, prominence_thre
                                    prominence=prominence_threshold,
                                    distance=min_distance)
     log(f"Найдено {len(peaks)} потенциальных пиков")
+    
+    # Если задана граница бета-спектра, ищем дополнительные пики вблизи неё
+    if beta_upper is not None:
+        additional_peaks = find_peaks_near_beta_boundary(energy, counts_smoothed, beta_upper, height=height)
+        peaks = np.unique(np.concatenate((peaks, additional_peaks)))
+        log(f"Обновлённый список пиков с учётом границы бета-спектра: {len(peaks)} пиков")
+    
+    # Если указаны ручные диапазоны, добавляем пики из них
+    if manual_peak_ranges:
+        log(f"Ручные диапазоны для поиска пиков: {manual_peak_ranges}")
+        for peak_range in manual_peak_ranges:
+            mask = (energy >= peak_range[0]) & (energy <= peak_range[1])
+            if np.any(mask):
+                peak_idx = np.argmax(counts_smoothed[mask]) + np.where(mask)[0][0]
+                peaks = np.append(peaks, peak_idx)
+                log(f"Добавлен пик вручную: энергия={energy[peak_idx]:.1f} кэВ")
+        peaks = np.unique(peaks)
+    
     if len(peaks) == 0:
         log("Пики не найдены")
         return [], []
+    
+    # Преобразуем массив peaks в целочисленный тип
+    peaks = peaks.astype(int)
     
     # 2. Получаем ширины пиков для начальных приближений
     widths, width_heights, left_ips, right_ips = peak_widths(counts_smoothed, peaks, rel_height=0.5)

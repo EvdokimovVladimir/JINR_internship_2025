@@ -10,7 +10,7 @@ from spectrum_utils import (
 # --- Новый способ задания имени файла ---
 filename = os.environ.get(
     "ALPHA_SPECTRUM_FILENAME",
-    '1. Ra-226_det2_vacuum_50V_35.6nA_24.6deg.txt'
+    '4. Ra-226_det2_air_4_90V_62.9nA_26.0deg.txt'
 )
 
 # --- Логирование ---
@@ -58,6 +58,12 @@ except Exception as e:
 
 # --- Извлечение параметров гауссианы ---
 a_fit, x0_fit, sigma_fit = popt
+
+# Проверка на отрицательное значение sigma
+if sigma_fit < 0:
+    sigma_fit = abs(sigma_fit)
+    log(f"Обнаружено отрицательное значение sigma, исправлено на {sigma_fit}")
+
 print(f"Параметры гауссианы: амплитуда={a_fit}, центр={x0_fit}, sigma={sigma_fit}")
 log(f"Параметры гауссианы: амплитуда={a_fit}, центр={x0_fit}, sigma={sigma_fit}")
 
@@ -148,7 +154,6 @@ print(f"Энергетический диапазон: {energy_alpha_pure[-1] - 
 log(f"Статистика чистого альфа-спектра: сумма={np.sum(counts_alpha_pure):.0f}, макс={np.max(counts_alpha_pure):.0f}, диапазон={energy_alpha_pure[-1] - energy_alpha_pure[0]:.1f} кэВ")
 
 # --- Фильтрация шума гауссовым фильтром ---
-
 FILTER_SIGMA = 50
 log(f"Гауссова фильтрация: sigma={FILTER_SIGMA}")
 
@@ -165,9 +170,28 @@ if len(energy_alpha_pure) > 0:
     
     # Сохраняем результат для дальнейшего анализа
     best_filtered = counts_alpha_filtered
-        
+
+    # Исключение данных референсного пика и бета-спектра
+    mask_physical_peaks = ~(
+        ((energy_alpha_pure >= beta_lower) & (energy_alpha_pure <= beta_upper)) |
+        ((energy_alpha_pure >= x0_fit - 5 * sigma_fit) & (energy_alpha_pure <= x0_fit + 5 * sigma_fit))
+    )
+    energy_alpha_trimmed = energy_alpha_pure[mask_physical_peaks]
+    counts_alpha_trimmed = counts_alpha_pure[mask_physical_peaks]
+    counts_alpha_filtered_trimmed = counts_alpha_filtered[mask_physical_peaks]
+    log(f"Данные обрезаны для исключения референсного пика и бета-спектра: {len(energy_alpha_trimmed)} точек")
+
+    # Ручные диапазоны для поиска пиков
+    manual_peak_ranges = [
+        (beta_upper, beta_upper)  # Пример: диапазон вокруг верхней границы бета-спектра
+    ]
+
     # Выполняем поиск и фиттинг пиков
-    fitted_peaks, peak_fits = find_and_fit_peaks(energy_alpha_pure, counts_alpha_pure, counts_alpha_filtered)
+    fitted_peaks, peak_fits = find_and_fit_peaks(
+        energy_alpha_trimmed, counts_alpha_trimmed, counts_alpha_filtered_trimmed, 
+        prominence_threshold=0.5, beta_upper=beta_upper, height=2, 
+        manual_peak_ranges=manual_peak_ranges
+    )
     
     # Построение графика с найденными и отфиттированными пиками
     plt.figure(figsize=(15, 10))
@@ -210,8 +234,8 @@ if len(energy_alpha_pure) > 0:
     
     # Выводим результаты
     print(f"\n=== РЕЗУЛЬТАТЫ АНАЛИЗА ПИКОВ ===")
-    print(f"Найдено и отфиттировано {len(fitted_peaks)} пиков:")
-    log(f"Найдено и отфиттировано {len(fitted_peaks)} пиков")
+    print(f"Найдено и отфиттовано {len(fitted_peaks)} пиков:")
+    log(f"Найдено и отфиттовано {len(fitted_peaks)} пиков")
     
     print(f"{'№':>2} {'Энергия':>8} {'FWHM':>6} {'Амплитуда':>9} {'Тип':>8} {'χ²ᵣ':>6} {'R²':>6} {'Adj.R²':>6}")
     print("-" * 65)
