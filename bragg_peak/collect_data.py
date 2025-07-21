@@ -49,6 +49,8 @@ def collect_data(data_dir, output_file):
     combined_data = combined_data[["Airdepth(mm)", "Энергия(keV)", "ΔЭнергии(keV)"]]
     # Сортируем данные по столбцу Airdepth(mm)
     combined_data = combined_data.sort_values(by="Airdepth(mm)", ascending=True)
+    # Удаляем повторяющиеся строки
+    combined_data = combined_data.drop_duplicates()
 
     # Сохраняем обрезанные данные
     combined_data.to_csv(output_file, index=False, header=["Airdepth(mm)", "Энергия(keV)", "ΔЭнергии(keV)"], sep="\t")

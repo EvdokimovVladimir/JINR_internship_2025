@@ -94,7 +94,7 @@ def plot_graph(collected_data):
         plt.plot(depths, [E * 1000 for E in theoretical_energies], color=color)  # Перевод обратно в keV, без легенды
 
     # Настройка графика
-    plt.title("Зависимость положения пика от толщины воздуха")
+    #plt.title("Зависимость положения пика от толщины воздуха")
     plt.xlabel("Толщина воздуха (см)")  # Уточнение размерности
     plt.ylabel("Энергия (кэВ)")
     plt.legend(title="Энергии")  # Указываем только экспериментальные данные
