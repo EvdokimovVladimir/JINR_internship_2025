@@ -72,7 +72,7 @@ def plot_energy_loss_loglog(energies, losses):
     plt.savefig("energy_loss_vs_energy_loglog.png", dpi=200)
 
 # Пример расчетов
-E = 5.0
+E = 7.83346
 print(f"Потери энергии для E={E} МэВ: {alpha_energy_loss(E):.3f} МэВ/см")
 print(f"Примерный пробег для E={E} МэВ: {alpha_range(E):.2f} см")
 
@@ -83,8 +83,8 @@ plot_energy_loss(energies1, losses)
 energies2, ranges = calc_alpha_range_curve(1, 10, 50)
 plot_alpha_range(energies2, ranges)
 
-depths, energies3, losses3 = calc_energy_vs_depth(5.0, 0.01, 5.0)
-plot_energy_vs_depth(depths, energies3, losses3, E0=5.0)
+depths, energies3, losses3 = calc_energy_vs_depth(E, 0.01, E)
+plot_energy_vs_depth(depths, energies3, losses3, E0=E)
 
 energies_log, losses_log = calc_energy_loss_curve_log(1e-3, 1e3, 300)
 plot_energy_loss_loglog(energies_log, losses_log)
