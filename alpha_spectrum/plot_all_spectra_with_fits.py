@@ -29,6 +29,9 @@ for i, (ax, filename) in enumerate(zip(axes, txt_files)):
     try:
         # Загружаем данные спектра
         data = np.loadtxt(filepath)
+        # Если data одномерный (только одна строка), преобразуем в двумерный
+        if data.ndim == 1:
+            data = data.reshape(1, -1)
         energy = data[:, 1]  # Энергия
         counts = data[:, 2]  # Счёты
 
@@ -60,6 +63,9 @@ for i, (ax, filename) in enumerate(zip(axes, txt_files)):
         # Если файл найден, добавляем результаты фитов
         if fit_file:
             fit_data = np.loadtxt(fit_file, skiprows=1)  # Пропускаем заголовок
+            # Если fit_data одномерный (только один пик), преобразуем в двумерный
+            if fit_data.ndim == 1:
+                fit_data = fit_data.reshape(1, -1)
             fit_energies = fit_data[:, 0]  # Энергия пиков
             fit_fwhms = fit_data[:, 2]     # FWHM
             fit_amplitudes = fit_data[:, 4]  # Амплитуды
