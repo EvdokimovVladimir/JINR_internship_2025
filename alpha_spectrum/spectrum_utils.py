@@ -157,12 +157,12 @@ def analyze_beta_spectrum_simple(energy, counts, search_range_keV=(1000, 8000)):
     return lower_boundary, upper_boundary, True
 
 
-def extract_pure_alpha_spectrum(energy, counts, beta_lower, beta_upper, ref_center, ref_sigma):
+def extract_pure_alpha_spectrum(energy, counts, beta_lower, beta_upper, ref_center, ref_sigma, REF_PEAK_WIDTH_SIGMA):
     """
     Исключает области бета-спектра и референсного пика из исходного спектра.
     """
     # Определяем область референсного пика (±5 сигм для полного исключения хвостов)
-    ref_peak_margin = 5 * ref_sigma
+    ref_peak_margin = REF_PEAK_WIDTH_SIGMA * ref_sigma
     ref_peak_lower = ref_center - ref_peak_margin
     ref_peak_upper = ref_center + ref_peak_margin
     
