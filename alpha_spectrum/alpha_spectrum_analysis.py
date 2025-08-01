@@ -12,14 +12,15 @@ REF_PEAK_WIDTH_SIGMA = 3
 REF_PEAK_MIN = 8000
 REF_PEAK_MAX = 10000
 
-FILTER_SIGMA = 50
+FILTER_SIGMA = 40
+PROMINENCE_THRESHOLD = 0.3
 
 SIGMA_TO_FWHM = 2 * np.sqrt(2 * np.log(2))
 
 # --- Новый способ задания имени файла ---
 filename = os.environ.get(
     "ALPHA_SPECTRUM_FILENAME",
-    '11. Ra-226_det1_vacuum_160V_900nA_25.4deg.txt'
+    '13. Ra-226_det1_vacuum_200V_1107nA_25.4deg.txt'
 )
 
 # --- Логирование ---
@@ -105,6 +106,7 @@ plt.xlabel('Энергия (keV)')
 plt.ylabel('Counts')
 plt.title('Альфа-спектр с фиттингом референсного пика')
 plt.yscale('log')
+plt.ylim(bottom=1)
 plt.legend()
 plt.grid(True, which="both", linestyle='--', linewidth=0.5)
 savefig_auto()
@@ -149,8 +151,8 @@ plt.yscale('log')
 plt.legend()
 plt.grid(True, which="both", linestyle='--', linewidth=0.5)
 plt.xlim(right=max(energy))
-plt.ylim(bottom=0.5)
-plt.tight_layout()
+plt.ylim(bottom=1)
+#plt.ylim(bottom=1)
 savefig_auto()
 # plt.show() # Этот вызов закомментирован
 
@@ -199,7 +201,7 @@ manual_peak_ranges = [
 # Выполняем поиск и фиттинг пиков
 fitted_peaks, peak_fits = find_and_fit_peaks(
     energy_alpha_trimmed, counts_alpha_trimmed, counts_alpha_filtered_trimmed, 
-    prominence_threshold=1, beta_upper=beta_upper, height=2, 
+    prominence_threshold=PROMINENCE_THRESHOLD, beta_upper=beta_upper, height=2, 
     manual_peak_ranges=manual_peak_ranges
 )
 
@@ -221,6 +223,7 @@ plt.xlabel('Энергия (keV)')
 plt.ylabel('Counts')
 plt.title('Найденные альфа-пики')
 plt.yscale('log')
+plt.ylim(bottom=1)
 plt.legend()
 plt.grid(True, alpha=0.3)
 
@@ -236,10 +239,11 @@ plt.xlabel('Энергия (keV)')
 plt.ylabel('Counts')
 plt.title('Фиттинг альфа-пиков гауссианами')
 plt.yscale('log')
+plt.ylim(bottom=1)
 plt.legend()
 plt.grid(True, alpha=0.3)
 
-plt.tight_layout()
+#plt.tight_layout()
 savefig_auto()
 
 # Выводим результаты
@@ -301,9 +305,9 @@ plt.title('Итоговый анализ альфа-спектра')
 plt.yscale('log')
 plt.grid(True, which="both", linestyle='--', linewidth=0.5)
 plt.xlim(left=min(energy), right=max(energy))
-plt.ylim(bottom=0.5)
+plt.ylim(bottom=1)
 plt.legend(loc='upper right', fontsize=9, ncol=2)
-plt.tight_layout()
+#plt.ylim(bottom=1)
 savefig_auto()
 
 # --- Сохранение результатов фитов в файл ---

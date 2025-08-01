@@ -23,6 +23,7 @@ for script in scripts:
     if os.path.exists(script_path):
         print(f"Запуск скрипта: {script}")
         result = subprocess.run([sys.executable, script_path], capture_output=True, text=True)
+        print(result.stdout)
         if result.returncode == 0:
             print(f"Скрипт {script} выполнен успешно.")
         else:

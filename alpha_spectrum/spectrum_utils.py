@@ -1,22 +1,30 @@
 import numpy as np
 from scipy.optimize import curve_fit
-from scipy.signal import find_peaks
+from scipy.signal import find_peaks, peak_widths
+from scipy.ndimage import uniform_filter1d, gaussian_filter1d
 import datetime
 import os
+from typing import Tuple, List, Dict, Optional
 
 
-def log(msg):
+def log(msg: str) -> None:
+    """Логирование сообщений с временной меткой."""
     log_filename = os.environ.get("LOG_FILENAME", "default_log.txt")
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open(log_filename, "a", encoding="utf-8") as f:
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         f.write(f"[{timestamp}] {msg}\n")
 
 
-def gaussian(x, a, x0, sigma):
+def gaussian(x: np.ndarray, a: float, x0: float, sigma: float) -> np.ndarray:
+    """Гауссова функция."""
     return a * np.exp(-(x - x0)**2 / (2 * sigma**2))
 
 
-def calculate_fit_metrics(y_observed, y_fitted, n_params):
+def calculate_fit_metrics(
+    y_observed: np.ndarray, 
+    y_fitted: np.ndarray, 
+    n_params: int
+) -> Dict[str, float]:
     """
     Расчёт метрик качества фита.
     
@@ -66,7 +74,11 @@ def calculate_fit_metrics(y_observed, y_fitted, n_params):
     }
 
 
-def analyze_beta_spectrum_simple(energy, counts, search_range_keV=(1000, 8000)):
+def analyze_beta_spectrum_simple(
+    energy: np.ndarray, 
+    counts: np.ndarray, 
+    search_range_keV: Tuple[float, float] = (1000, 8000)
+) -> Tuple[float, float, bool]:
     """
     Простой анализ бета-спектра без сложного фиттинга.
     Основан на анализе структуры данных.
@@ -92,7 +104,6 @@ def analyze_beta_spectrum_simple(energy, counts, search_range_keV=(1000, 8000)):
     log(f"Область до первого пика: {len(energy_region)} точек")
     
     # 3. Сглаживаем для устранения шума
-    from scipy.ndimage import uniform_filter1d
     smoothed_counts = uniform_filter1d(counts_region, size=5)
     log(f"Сглаживание данных выполнено (размер окна=5)")
     
@@ -157,7 +168,57 @@ def analyze_beta_spectrum_simple(energy, counts, search_range_keV=(1000, 8000)):
     return lower_boundary, upper_boundary, True
 
 
-def extract_pure_alpha_spectrum(energy, counts, beta_lower, beta_upper, ref_center, ref_sigma, REF_PEAK_WIDTH_SIGMA):
+def single_gaussian(x: np.ndarray, a: float, x0: float, sigma: float, bg: float) -> np.ndarray:
+    """
+    Одиночная гауссиана с фоном.
+    """
+    return a * np.exp(-(x - x0)**2 / (2 * sigma**2)) + bg
+
+def multi_gaussian(x: np.ndarray, *params) -> np.ndarray:
+    """
+    Сумма нескольких гауссиан с общим фоном.
+    """
+    n_peaks = (len(params) - 1) // 3
+    bg = params[-1]
+    result = np.full_like(x, bg)
+    for idx in range(n_peaks):
+        a, x0, sigma = params[idx*3:(idx+1)*3]
+        result += a * np.exp(-(x - x0)**2 / (2 * sigma**2))
+    return result
+
+def _calc_sigma(width: float, energy_step: float, min_sigma: float) -> float:
+    """Вычисляет sigma из FWHM, учитывая минимальное значение."""
+    sigma = width * energy_step / 2.35
+    return max(sigma, min_sigma)
+
+def _make_initial_guess(
+    group: List[int],
+    peak_indices: List[int],
+    counts_original: np.ndarray,
+    energy: np.ndarray,
+    widths: np.ndarray,
+    fit_energy: np.ndarray,
+    min_sigma: float
+) -> List[float]:
+    """Формирует initial_guess для группы пиков."""
+    guess = []
+    for i in group:
+        peak_idx = peak_indices[group.index(i)]
+        amp = counts_original[peak_idx]
+        center = np.clip(energy[peak_idx], fit_energy[0], fit_energy[-1])
+        sigma = _calc_sigma(widths[i], energy[1] - energy[0], min_sigma)
+        guess.extend([amp, center, sigma])
+    return guess
+
+def extract_pure_alpha_spectrum(
+    energy: np.ndarray, 
+    counts: np.ndarray, 
+    beta_lower: float, 
+    beta_upper: float, 
+    ref_center: float, 
+    ref_sigma: float, 
+    REF_PEAK_WIDTH_SIGMA: float
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Исключает области бета-спектра и референсного пика из исходного спектра.
     """
@@ -179,13 +240,23 @@ def extract_pure_alpha_spectrum(energy, counts, beta_lower, beta_upper, ref_cent
     energy_alpha = energy[alpha_mask]
     counts_alpha = counts[alpha_mask]
     
-    log(f"Чистый альфа-спектр: {len(energy_alpha)} точек в диапазоне {energy_alpha[0]:.1f}-{energy_alpha[-1]:.1f} кэВ")
-    log(f"Исключены области: бета-спектр (0-{beta_upper_extended:.1f} кэВ), референсный пик ({ref_peak_lower:.1f}-{ref_peak_upper:.1f} кэВ)")
+    # Проверка на пустой результат
+    if len(energy_alpha) == 0 or len(counts_alpha) == 0:
+        log("Внимание: после маскирования альфа-спектр пуст!")
+    else:
+        log(f"Чистый альфа-спектр: {len(energy_alpha)} точек в диапазоне {energy_alpha[0]:.1f}-{energy_alpha[-1]:.1f} кэВ")
+        log(f"Исключены области: бета-спектр (0-{beta_upper_extended:.1f} кэВ), референсный пик ({ref_peak_lower:.1f}-{ref_peak_upper:.1f} кэВ)")
     
     return energy_alpha, counts_alpha, alpha_mask
 
 
-def find_peaks_near_beta_boundary(energy, counts_smoothed, beta_upper, margin=300, height=0.5):
+def find_peaks_near_beta_boundary(
+    energy: np.ndarray, 
+    counts_smoothed: np.ndarray, 
+    beta_upper: float, 
+    margin: float = 300, 
+    height: float = 0.5
+) -> List[int]:
     """
     Поиск пиков вблизи верхней границы бета-спектра.
     
@@ -209,24 +280,32 @@ def find_peaks_near_beta_boundary(energy, counts_smoothed, beta_upper, margin=30
         return []
     
     # Дополнительное сглаживание для устранения шума
-    from scipy.ndimage import gaussian_filter1d
     smoothed_region = gaussian_filter1d(search_region, sigma=3)
     
-    from scipy.signal import find_peaks
     peaks, _ = find_peaks(smoothed_region, prominence=0.1, height=height)  # Уменьшены пороги prominence и height
     log(f"Найдено {len(peaks)} пиков вблизи границы")
     
     return [np.where(energy == search_energy[peak])[0][0] for peak in peaks]
 
-def find_and_fit_peaks(energy, counts_original, counts_smoothed, prominence_threshold=1, min_distance=20, beta_upper=None, height=None, manual_peak_ranges=None):
+def find_and_fit_peaks(
+    energy: np.ndarray, 
+    counts_original: np.ndarray, 
+    counts_smoothed: np.ndarray, 
+    prominence_threshold: float = 1, 
+    min_distance: int = 20, 
+    beta_upper: Optional[float] = None, 
+    height: Optional[float] = None, 
+    manual_peak_ranges: Optional[List[Tuple[float, float]]] = None
+) -> Tuple[List[Dict], List[Tuple[np.ndarray, np.ndarray]]]:
     """
     Поиск и фиттинг пиков в спектре.
     """
+    MIN_SIGMA = 100
     log(f"Поиск пиков: prominence_threshold={prominence_threshold}, min_distance={min_distance}")
-    from scipy.signal import find_peaks, peak_widths
-    peaks, properties = find_peaks(counts_smoothed, 
-                                   prominence=prominence_threshold,
-                                   distance=min_distance)
+    peaks, _ = find_peaks(counts_smoothed, 
+                          prominence=prominence_threshold,
+                          distance=min_distance,
+                          height=height)
     log(f"Найдено {len(peaks)} потенциальных пиков")
     
     # Если задана граница бета-спектра, ищем дополнительные пики вблизи неё
@@ -254,26 +333,11 @@ def find_and_fit_peaks(energy, counts_original, counts_smoothed, prominence_thre
     peaks = peaks.astype(int)
     
     # 2. Получаем ширины пиков для начальных приближений
-    widths, width_heights, left_ips, right_ips = peak_widths(counts_smoothed, peaks, rel_height=0.5)
+    widths, _, _, _ = peak_widths(counts_smoothed, peaks, rel_height=0.5)
     log(f"Ширины пиков (FWHM): {widths}")
     
     # 3. Группируем близкие пики (возможно слившиеся)
-    peak_groups = []
-    current_group = [0]
-    
-    for i in range(1, len(peaks)):
-        # Если пики ближе чем 3 ширины предыдущего пика, считаем их слившимися
-        distance = energy[peaks[i]] - energy[peaks[i-1]]
-        avg_width = (widths[i-1] + widths[i]) / 2 * (energy[1] - energy[0])  # в кэВ
-        
-        if distance < 3 * avg_width:
-            current_group.append(i)
-        else:
-            peak_groups.append(current_group)
-            current_group = [i]
-    
-    peak_groups.append(current_group)
-    
+    peak_groups = group_close_peaks(peaks, widths, energy)
     log(f"Пики сгруппированы в {len(peak_groups)} групп(ы): {peak_groups}")
     
     # 4. Фиттинг каждой группы
@@ -282,12 +346,10 @@ def find_and_fit_peaks(energy, counts_original, counts_smoothed, prominence_thre
     
     for group_idx, group in enumerate(peak_groups):
         log(f"Фиттинг группы {group_idx + 1}: {len(group)} пик(ов)")
-        
-        # Определяем область для фиттинга
         peak_indices = [peaks[i] for i in group]
         energies_of_peaks = [energy[idx] for idx in peak_indices]
         
-        # Расширяем область фиттинга
+        # Определяем область для фиттинга
         fit_range = max(50, int(np.mean(widths[[i for i in group]]) * 3))
         left_bound = max(0, min(peak_indices) - fit_range)
         right_bound = min(len(energy) - 1, max(peak_indices) + fit_range)
@@ -297,20 +359,35 @@ def find_and_fit_peaks(energy, counts_original, counts_smoothed, prominence_thre
         
         if len(group) == 1:
             # Одиночный пик - простая гауссиана
-            def single_gaussian(x, a, x0, sigma, bg):
-                return a * np.exp(-(x - x0)**2 / (2 * sigma**2)) + bg
-            
             peak_idx = peak_indices[0]
+            amp_guess = counts_original[peak_idx]
+            center_guess = energy[peak_idx]
+            sigma_guess = _calc_sigma(widths[group[0]], energy[1] - energy[0], MIN_SIGMA)
+            center_guess = np.clip(center_guess, fit_energy[0], fit_energy[-1])
             initial_guess = [
-                counts_original[peak_idx],  # амплитуда
-                energy[peak_idx],           # центр
-                widths[group[0]] * (energy[1] - energy[0]) / 2.35,  # сигма из FWHM
-                np.min(fit_counts)          # фон
+                amp_guess,
+                center_guess,
+                sigma_guess,
+                np.min(fit_counts)
             ]
-            
+            lower_bounds = [
+                0,
+                fit_energy[0],
+                MIN_SIGMA,
+                -np.inf
+            ]
+            upper_bounds = [
+                np.inf,
+                fit_energy[-1],
+                np.inf,
+                np.inf
+            ]
             try:
-                popt, pcov = curve_fit(single_gaussian, fit_energy, fit_counts, 
-                                       p0=initial_guess, maxfev=5000)
+                popt, pcov = curve_fit(
+                    single_gaussian, fit_energy, fit_counts,
+                    p0=initial_guess, maxfev=5000,
+                    bounds=(lower_bounds, upper_bounds)
+                )
                 log(f"Фиттинг одиночного пика успешен: центр={popt[1]:.1f}, FWHM={popt[2]*2.35:.1f}, амплитуда={popt[0]:.1f}")
                 
                 # Расчёт метрик фита
@@ -337,80 +414,113 @@ def find_and_fit_peaks(energy, counts_original, counts_smoothed, prominence_thre
                 print(f"    Метрики: χ²={metrics['chi2']:.2f}, χ²ᵣ={metrics['reduced_chi2']:.2f}, R²={metrics['r_squared']:.3f}, Adj.R²={metrics['adj_r_squared']:.3f}")
 
             except Exception as e:
-                print(f"  Ошибка фиттинга одиночного пика: {e}")
-                log(f"Ошибка фиттинга одиночного пика: {e}")
+                print(f"  Ошибка фиттинга одиночного пика: {type(e).__name__}: {e}")
+                log(f"Ошибка фиттинга одиночного пика: {type(e).__name__}: {e}")
         
         else:
-            # Множественные пики - сумма гауссиан
-            def multi_gaussian(x, *params):
-                # params: [a1, x1, s1, a2, x2, s2, ..., bg]
-                n_peaks = len(group)
-                bg = params[-1]
-                result = np.full_like(x, bg)
-                
-                for i in range(n_peaks):
-                    a, x0, sigma = params[i*3:(i+1)*3]
-                    result += a * np.exp(-(x - x0)**2 / (2 * sigma**2))
-                
-                return result
-            
-            # Начальные приближения для множественных пиков
-            initial_guess = []
-            for i in group:
-                peak_idx = peak_indices[group.index(i)]
-                initial_guess.extend([
-                    counts_original[peak_idx],  # амплитуда
-                    energy[peak_idx],           # центр
-                    widths[i] * (energy[1] - energy[0]) / 2.35  # сигма
-                ])
-            initial_guess.append(np.min(fit_counts))  # фон
-            
-            # Проверяем интенсивности пиков
+            initial_guess = _make_initial_guess(group, peak_indices, counts_original, energy, widths, fit_energy, MIN_SIGMA)
+            initial_guess.append(np.min(fit_counts))
+            # Коррекция слабых пиков
             intensities = [counts_original[peak_indices[i]] for i in range(len(group))]
             max_intensity = max(intensities)
             intensity_ratios = [intensity / max_intensity for intensity in intensities]
-            
-            # Если один из пиков слабее 20% от основного, добавляем коррекцию
             for i, ratio in enumerate(intensity_ratios):
                 if ratio < 0.2:
                     initial_guess[i * 3] *= 0.5  # Уменьшаем амплитуду слабого пика
-            
-            try:
-                popt, pcov = curve_fit(multi_gaussian, fit_energy, fit_counts, 
-                                       p0=initial_guess, maxfev=10000)
-                log(f"Фиттинг множественных пиков успешен: {[popt[i*3+1] for i in range(len(group))]}")
-                
-                # Расчёт метрик фита для всей группы
-                fitted_values = multi_gaussian(fit_energy, *popt)
-                group_metrics = calculate_fit_metrics(fit_counts, fitted_values, len(popt))
-                log(f"Метрики фита группы пиков: χ²={group_metrics['chi2']:.2f}, R²={group_metrics['r_squared']:.3f}, RMSE={group_metrics['rmse']:.2f}")
-                
-                # Извлекаем параметры отдельных пиков
-                n_peaks = len(group)
-                for i in range(n_peaks):
-                    a, x0, sigma = popt[i*3:(i+1)*3]
-                    fitted_peaks.append({
-                        'type': 'multiple',
-                        'group': group_idx,
-                        'energy': x0,
-                        'amplitude': a,
-                        'sigma': sigma,
-                        'fwhm': sigma * 2.35,
-                        'background': popt[-1],
-                        'fit_energy': fit_energy,
-                        'fit_counts': fitted_values,
-                        'parameters': popt,
-                        'covariance': pcov,
-                        'metrics': group_metrics  # Общие метрики для всей группы
-                    })
-                    
-                    print(f"  Пик {i+1} на {x0:.1f} кэВ, FWHM = {sigma*2.35:.1f} кэВ")
-                
-                print(f"    Метрики группы: χ²={group_metrics['chi2']:.2f}, χ²ᵣ={group_metrics['reduced_chi2']:.2f}, R²={group_metrics['r_squared']:.3f}, Adj.R²={group_metrics['adj_r_squared']:.3f}")
-                all_fits.append((fit_energy, fitted_values))
-                
-            except Exception as e:
-                print(f"  Ошибка фиттинга множественных пиков: {e}")
-                log(f"Ошибка фиттинга множественных пиков: {e}")
-    
+
+            # --- Новый блок: повторный фиттинг без отрицательных амплитуд ---
+            max_refits = len(group)  # максимум попыток — по числу пиков
+            refit_attempt = 0
+            group_indices = list(range(len(group)))
+            while refit_attempt < max_refits and len(group_indices) > 0:
+                try:
+                    n_peaks = len(group_indices)
+                    refit_initial_guess = _make_initial_guess(
+                        group_indices, peak_indices, counts_original, energy, widths, fit_energy, MIN_SIGMA
+                    )
+                    refit_initial_guess.append(np.min(fit_counts))
+                    lower_bounds = [
+                        0,
+                        fit_energy[0],
+                        MIN_SIGMA
+                    ] * n_peaks + [-np.inf]
+                    upper_bounds = [
+                        np.inf,
+                        fit_energy[-1],
+                        np.inf
+                    ] * n_peaks + [np.inf]
+                    popt, pcov = curve_fit(
+                        multi_gaussian, fit_energy, fit_counts,
+                        p0=refit_initial_guess, maxfev=10000,
+                        bounds=(lower_bounds, upper_bounds)
+                    )
+                    amplitudes = [popt[i*3] for i in range(n_peaks)]
+                    neg_indices = [i for i, a in enumerate(amplitudes) if a < 0]
+                    if len(neg_indices) == 0:
+                        # Все амплитуды положительные — успех
+                        log(f"Фиттинг множественных пиков успешен: {[popt[i*3+1] for i in range(n_peaks)]}")
+                        fitted_values = multi_gaussian(fit_energy, *popt)
+                        group_metrics = calculate_fit_metrics(fit_counts, fitted_values, len(popt))
+                        log(f"Метрики фита группы пиков: χ²={group_metrics['chi2']:.2f}, R²={group_metrics['r_squared']:.3f}, RMSE={group_metrics['rmse']:.2f}")
+                        # Извлекаем параметры отдельных пиков
+                        for idx, i in enumerate(group_indices):
+                            a, x0, sigma = popt[idx*3:(idx+1)*3]
+                            fitted_peaks.append({
+                                'type': 'multiple',
+                                'group': group_idx,
+                                'energy': x0,
+                                'amplitude': a,
+                                'sigma': sigma,
+                                'fwhm': sigma * 2.35,
+                                'background': popt[-1],
+                                'fit_energy': fit_energy,
+                                'fit_counts': fitted_values,
+                                'parameters': popt,
+                                'covariance': pcov,
+                                'metrics': group_metrics  # Общие метрики для всей группы
+                            })
+                            print(f"  Пик {idx+1} на {x0:.1f} кэВ, FWHM = {sigma*2.35:.1f} кэВ")
+                        print(f"    Метрики группы: χ²={group_metrics['chi2']:.2f}, χ²ᵣ={group_metrics['reduced_chi2']:.2f}, R²={group_metrics['r_squared']:.3f}, Adj.R²={group_metrics['adj_r_squared']:.3f}")
+                        all_fits.append((fit_energy, fitted_values))
+                        break  # успех, выходим из цикла
+                    else:
+                        # Удаляем пики с отрицательной амплитудой и повторяем
+                        log(f"Обнаружены пики с отрицательной амплитудой: {neg_indices}, удаляем и повторяем фиттинг")
+                        group_indices = [i for j, i in enumerate(group_indices) if j not in neg_indices]
+                        if len(group_indices) == 0:
+                            log("Все пики в группе оказались с отрицательной амплитудой, группа пропущена")
+                            break
+                        refit_attempt += 1
+                except Exception as e:
+                    print(f"  Ошибка фиттинга множественных пиков: {type(e).__name__}: {e}")
+                    log(f"Ошибка фиттинга множественных пиков: {type(e).__name__}: {e}")
+                    break
+            # --- Конец нового блока ---
     return fitted_peaks, all_fits
+
+def group_close_peaks(
+    peaks: np.ndarray, 
+    widths: np.ndarray, 
+    energy: np.ndarray, 
+    width_factor: float = 3
+) -> List[List[int]]:
+    """
+    Группирует пики, находящиеся ближе друг к другу, чем width_factor * средняя ширина.
+    Возвращает список групп (списков индексов в peaks).
+    """
+    if len(peaks) == 0:
+        return []
+    if len(peaks) == 1:
+        return [[0]]
+    peak_groups = []
+    current_group = [0]
+    for i in range(1, len(peaks)):
+        distance = energy[peaks[i]] - energy[peaks[i-1]]
+        avg_width = (widths[i-1] + widths[i]) / 2 * (energy[1] - energy[0])
+        if distance < width_factor * avg_width:
+            current_group.append(i)
+        else:
+            peak_groups.append(current_group)
+            current_group = [i]
+    peak_groups.append(current_group)
+    return peak_groups
