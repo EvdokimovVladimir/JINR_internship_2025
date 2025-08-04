@@ -11,9 +11,10 @@ from spectrum_utils import (
 REF_PEAK_WIDTH_SIGMA = 3
 REF_PEAK_MIN = 8000
 REF_PEAK_MAX = 10000
+REF_PEAK_AMP_MIN = 0
 
-FILTER_SIGMA = 40
-PROMINENCE_THRESHOLD = 0.3
+FILTER_SIGMA = 20
+PROMINENCE_THRESHOLD = 0.5
 
 SIGMA_TO_FWHM = 2 * np.sqrt(2 * np.log(2))
 
@@ -54,12 +55,19 @@ log(f"Выделена область референсного пика: {REF_PE
 
 # --- Начальные приближения для параметров гауссианы ---
 init_guess_pos = (REF_PEAK_MIN + REF_PEAK_MAX) / 2
-initial_guess = [max(counts_peak), init_guess_pos, 10]
+initial_guess = [max(counts_peak), init_guess_pos, (REF_PEAK_MAX - REF_PEAK_MIN)/2]
 log(f"Начальные параметры для фиттинга гауссианы: {initial_guess}")
 
 # --- Фиттинг данных ---
+# Добавлены ограничения на параметры: амплитуда > 0, центр в диапазоне пика, sigma > 0
+bounds = (
+    [REF_PEAK_AMP_MIN, REF_PEAK_MIN, 0],  # нижние границы: амплитуда, центр, sigma
+    [np.inf, REF_PEAK_MAX, (REF_PEAK_MAX-REF_PEAK_MIN)]  # верхние границы
+)
 try:
-    popt, pcov = curve_fit(gaussian, energy_peak, counts_peak, p0=initial_guess)
+    popt, pcov = curve_fit(
+        gaussian, energy_peak, counts_peak, p0=initial_guess, bounds=bounds
+    )
     log(f"Фиттинг гауссианы успешен: параметры {popt}")
 except Exception as e:
     log(f"Ошибка фиттинга гауссианы: {e}")

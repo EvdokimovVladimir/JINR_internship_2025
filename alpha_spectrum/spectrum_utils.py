@@ -300,7 +300,7 @@ def find_and_fit_peaks(
     """
     Поиск и фиттинг пиков в спектре.
     """
-    MIN_SIGMA = 100
+    MIN_SIGMA = 10
     log(f"Поиск пиков: prominence_threshold={prominence_threshold}, min_distance={min_distance}")
     peaks, _ = find_peaks(counts_smoothed, 
                           prominence=prominence_threshold,
