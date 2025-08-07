@@ -8,13 +8,16 @@ from spectrum_utils import (
     extract_pure_alpha_spectrum, find_and_fit_peaks
 )
 
-REF_PEAK_WIDTH_SIGMA = 3
-REF_PEAK_MIN = 8000
-REF_PEAK_MAX = 10000
+REF_PEAK_WIDTH_SIGMA = 10
+REF_PEAK_MIN = 8600
+REF_PEAK_MAX = 8900
 REF_PEAK_AMP_MIN = 0
 
-FILTER_SIGMA = 20
-PROMINENCE_THRESHOLD = 0.5
+FILTER_SIGMA = 40
+PROMINENCE_THRESHOLD = 0.4
+MIN_PEAK_HEIGHT = 2
+
+BETA_UPPER_MARGIN = 1000
 
 SIGMA_TO_FWHM = 2 * np.sqrt(2 * np.log(2))
 
@@ -122,6 +125,7 @@ savefig_auto()
 
 # --- Определение границ бета-спектра простым методом ---
 beta_lower, beta_upper, simple_ok = analyze_beta_spectrum_simple(energy, counts)
+beta_upper += BETA_UPPER_MARGIN
 print(f"Границы бета-спектра (простой метод): {beta_lower:.2f} кэВ - {beta_upper:.2f} кэВ")
 log(f"Границы бета-спектра (простой метод): {beta_lower:.2f} кэВ - {beta_upper:.2f} кэВ")
 
@@ -138,7 +142,7 @@ plt.plot(energy, counts, label='Полный спектр', color='lightgray', a
 
 # Заливка исключенных областей
 plt.fill_between(
-    energy, counts, where=(energy >= 0) & (energy <= beta_upper + 200),
+    energy, counts, where=(energy >= 0) & (energy <= beta_upper),
     color='red', alpha=0.3, label='Исключено: бета-спектр + шум'
 )
 plt.fill_between(
@@ -209,7 +213,7 @@ manual_peak_ranges = [
 # Выполняем поиск и фиттинг пиков
 fitted_peaks, peak_fits = find_and_fit_peaks(
     energy_alpha_trimmed, counts_alpha_trimmed, counts_alpha_filtered_trimmed, 
-    prominence_threshold=PROMINENCE_THRESHOLD, beta_upper=beta_upper, height=2, 
+    prominence_threshold=PROMINENCE_THRESHOLD, beta_upper=beta_upper, height=MIN_PEAK_HEIGHT, 
     manual_peak_ranges=manual_peak_ranges
 )
 
