@@ -75,6 +75,15 @@ def align_peaks_across_spectra(grouped_data):
             aligned_peaks[i].append(peak)
     return aligned_peaks
 
+def save_table(filepath, header, rows):
+    """
+    Сохраняет табличные данные в CSV-файл.
+    """
+    with open(filepath, 'w', encoding='utf-8', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        writer.writerows(rows)
+
 def plot_peak_positions_vs_voltage(data):
     """
     Plots the peak positions (Energy) as a function of voltage for each peak, including error bars.
@@ -99,6 +108,23 @@ def plot_peak_positions_vs_voltage(data):
     plt.tight_layout()
     results_dir = "./results"
     os.makedirs(results_dir, exist_ok=True)
+
+    # Сохраняем табличные данные
+    table = []
+    for peak_index, peaks in aligned_peaks.items():
+        for peak in peaks:
+            table.append([
+                get_peak_label(peak_index),
+                peak["Voltage (V)"],
+                peak["Energy(keV)"],
+                peak["ΔEnergy(keV)"]
+            ])
+    save_table(
+        os.path.join(results_dir, "peak_positions_vs_voltage.csv"),
+        ["Пик", "Напряжение (В)", "Энергия (кэВ)", "ΔЭнергия (кэВ)"],
+        table
+    )
+
     plt.savefig(os.path.join(results_dir, "peak_positions_vs_voltage.png"))
     plt.close()  # Закрываем график после сохранения
 
@@ -133,6 +159,26 @@ def plot_normalized_peak_positions_vs_voltage(data):
     plt.tight_layout()
     results_dir = "./results"
     os.makedirs(results_dir, exist_ok=True)
+
+    # Сохраняем табличные данные
+    table = []
+    for peak_index, peaks in aligned_peaks.items():
+        energies = [peak["Energy(keV)"] for peak in peaks]
+        errors = [peak["ΔEnergy(keV)"] for peak in peaks]
+        max_energy = max(energies)
+        for i, peak in enumerate(peaks):
+            table.append([
+                get_peak_label(peak_index),
+                peak["Voltage (V)"],
+                energies[i] / max_energy,
+                errors[i] / max_energy
+            ])
+    save_table(
+        os.path.join(results_dir, "normalized_peak_positions_vs_voltage.csv"),
+        ["Пик", "Напряжение (В)", "Нормированная энергия", "Нормированная ΔЭнергия"],
+        table
+    )
+
     plt.savefig(os.path.join(results_dir, "normalized_peak_positions_vs_voltage.png"))
     plt.close()  # Закрываем график после сохранения
 
@@ -160,6 +206,23 @@ def plot_fwhm_vs_voltage(data):
     plt.tight_layout()
     results_dir = "./results"
     os.makedirs(results_dir, exist_ok=True)
+
+    # Сохраняем табличные данные
+    table = []
+    for peak_index, peaks in aligned_peaks.items():
+        for peak in peaks:
+            table.append([
+                get_peak_label(peak_index),
+                peak["Voltage (V)"],
+                peak["FWHM(keV)"],
+                peak["ΔFWHM(keV)"]
+            ])
+    save_table(
+        os.path.join(results_dir, "fwhm_vs_voltage.csv"),
+        ["Пик", "Напряжение (В)", "ПШПВ (кэВ)", "ΔПШПВ (кэВ)"],
+        table
+    )
+
     plt.savefig(os.path.join(results_dir, "fwhm_vs_voltage.png"))
     plt.close()  # Закрываем график после сохранения
 
@@ -187,6 +250,23 @@ def plot_amplitude_vs_voltage(data):
     plt.tight_layout()
     results_dir = "./results"
     os.makedirs(results_dir, exist_ok=True)
+
+    # Сохраняем табличные данные
+    table = []
+    for peak_index, peaks in aligned_peaks.items():
+        for peak in peaks:
+            table.append([
+                get_peak_label(peak_index),
+                peak["Voltage (V)"],
+                peak["Amplitude"],
+                peak["ΔAmplitude"]
+            ])
+    save_table(
+        os.path.join(results_dir, "amplitude_vs_voltage.csv"),
+        ["Пик", "Напряжение (В)", "Амплитуда", "ΔАмплитуда"],
+        table
+    )
+
     plt.savefig(os.path.join(results_dir, "amplitude_vs_voltage.png"))
     plt.close()  # Закрываем график после сохранения
 
@@ -212,6 +292,20 @@ def plot_current_vs_voltage(data):
     plt.tight_layout()
     results_dir = "./results"
     os.makedirs(results_dir, exist_ok=True)
+
+    # Сохраняем табличные данные
+    table = []
+    for spectrum, peaks in grouped_data.items():
+        table.append([
+            peaks[0]["Voltage (V)"],
+            peaks[0]["Current (nA)"]
+        ])
+    save_table(
+        os.path.join(results_dir, "current_vs_voltage.csv"),
+        ["Напряжение (В)", "Ток (нА)"],
+        table
+    )
+
     plt.savefig(os.path.join(results_dir, "current_vs_voltage.png"))
     plt.close()  # Закрываем график после сохранения
 
