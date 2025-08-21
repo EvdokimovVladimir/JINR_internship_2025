@@ -3,6 +3,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
+# Диапазон по оси Ox (энергии)
+ENERGY_MIN = 8400    # левая граница, keV, None — не задавать
+ENERGY_MAX = 8600    # правая граница, keV, None — не задавать
+
+# Диапазон по оси Oy (Counts)
+COUNTS_MIN = 1       # нижняя граница, None — не задавать
+COUNTS_MAX = 3000     # верхняя граница, None — не задавать
+
 # Папка с исходными спектрами
 spectra_dir = "spectra"
 
@@ -35,6 +43,10 @@ for i, (ax, filename) in enumerate(zip(axes, txt_files)):
         # Добавляем данные на подграфик
         ax.plot(energy, counts, 'k.', label=filename)  # Чёрные точки
         ax.set_yscale("log")
+        if ENERGY_MIN is not None and ENERGY_MAX is not None:
+            ax.set_xlim(ENERGY_MIN, ENERGY_MAX)  # Устанавливаем диапазон по Ox
+        if COUNTS_MIN is not None and COUNTS_MAX is not None:
+            ax.set_ylim(COUNTS_MIN, COUNTS_MAX)  # Устанавливаем диапазон по Oy
         if i == 0:  # Подпись оси Oy только для первого графика
             ax.set_ylabel("Counts")
         ax.legend(fontsize=8, loc="upper right")
