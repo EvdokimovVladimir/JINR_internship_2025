@@ -27,9 +27,17 @@ fig = plt.figure(figsize=(12, 8))
 gs = fig.add_gridspec(len(txt_files), hspace=0)
 axes = [fig.add_subplot(gs[i, 0]) for i in range(len(txt_files))]
 
-# Если только один файл, оборачиваем ось в список для совместимости
-if len(txt_files) == 1:
+# Гарантируем, что axes — плоский список объектов Axes (на случай неожиданных вложений)
+if not isinstance(axes, (list, tuple, np.ndarray)):
     axes = [axes]
+else:
+    flat = []
+    for a in axes:
+        if isinstance(a, (list, tuple, np.ndarray)):
+            flat.extend(list(a))
+        else:
+            flat.append(a)
+    axes = flat
 
 # Проходим по каждому файлу и добавляем его данные на отдельный подграфик
 for i, (ax, filename) in enumerate(zip(axes, txt_files)):
