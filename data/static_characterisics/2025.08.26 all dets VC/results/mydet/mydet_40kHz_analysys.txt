@@ -1,0 +1,10 @@
+Analysis 1/C^2 vs V
+Meta: mydet Side N 40kHz
+
+Left linear zone indices: 0..59, Voltages: 0 .. 59
+Right linear zone indices: 87..300, Voltages: 87 .. 300
+Transition zone voltages (3σ left / 3σ right around sigmoid center): 59.0012 .. 86.6377
+
+Left line: y = 22.1711 * x + 20.8857   (R2=0.999048)
+Right line: y = 0.150942 * x + 1642.68   (R2=0.70784)
+Intersection point: x=73.6505, y=1653.8
