@@ -1,0 +1,10 @@
+Analysis 1/C^2 vs V
+Meta: det1 Side N 40kHz
+
+Left linear zone indices: 0..50, Voltages: 0 .. 50
+Right linear zone indices: 70..300, Voltages: 70 .. 300
+Transition zone voltages (1σ left / 3σ right around gaussian center): 50.0738 .. 69.9975
+
+Left line: y = 0.543762 * x + 0.145779   (R2=0.999789)
+Right line: y = 0.00195419 * x + 30.5483   (R2=0.933587)
+Intersection point: x=56.1131, y=30.658
