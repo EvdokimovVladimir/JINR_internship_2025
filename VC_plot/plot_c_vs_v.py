@@ -7,7 +7,8 @@ import pandas as pd
 from scipy.signal import savgol_filter
 from scipy.optimize import curve_fit
 
-# Добавленная константа ширины переходной зоны в сигмах (левая и правая)
+# Изменена логика: теперь данные в файлах в пФ (pF), столбец называется 'Capacitance_pF'.
+# Выходная единица для InvC2 — 1 / (нФ^2) (1 / nF^2).
 TRANSITION_WIDTH_SIGMA_LEFT = 3
 TRANSITION_WIDTH_SIGMA_RIGHT = 3
 
@@ -92,26 +93,27 @@ def save_figure(out_png_path, xlabel="Voltage (V)", ylabel=None, title=None, leg
 	print(f"{print_prefix}: {out_png_path}")
 
 def plot_and_save(df, meta, out_png_path):
-	# df expected to contain columns: 'Voltage_V', 'Capacitance_nF'
-	if df is None or df.empty or 'Voltage_V' not in df.columns or 'Capacitance_nF' not in df.columns:
+	# df expected to contain columns: 'Voltage_V', 'Capacitance_pF'
+	if df is None or df.empty or 'Voltage_V' not in df.columns or 'Capacitance_pF' not in df.columns:
 		print(f"Нет данных для построения: {out_png_path}")
 		return
 	plt.figure(figsize=(8,5))
-	plt.plot(df['Voltage_V'], df['Capacitance_nF'], marker='o', linestyle='-', color='tab:blue')
+	plt.plot(df['Voltage_V'], df['Capacitance_pF'], marker='o', linestyle='-', color='tab:blue')
 	title = make_title(meta, suffix_if_meta=None, default="C vs V")
-	save_figure(out_png_path, xlabel="Voltage (V)", ylabel="Capacitance (nF)", title=title, legend=False, print_prefix="Saved")
+	# подпись в пФ
+	save_figure(out_png_path, xlabel="Voltage (V)", ylabel="Capacitance (pF)", title=title, legend=False, print_prefix="Saved")
 
-# Изменённая plot_inv_c2_and_save: принимает df, добавляет столбец InvC2 и возвращает df
+# Изменённая plot_inv_c2_and_save: принимает df с Capacitance_pF и возвращает df с InvC2 в 1/(нФ^2)
 def plot_inv_c2_and_save(df, meta, out_png_path):
-	# ожидаем столбцы Voltage_V, Capacitance_nF
-	if df is None or df.empty or 'Voltage_V' not in df.columns or 'Capacitance_nF' not in df.columns:
+	# ожидаем столбцы Voltage_V, Capacitance_pF
+	if df is None or df.empty or 'Voltage_V' not in df.columns or 'Capacitance_pF' not in df.columns:
 		print(f"Нет данных для 1/C^2: {out_png_path}")
 		return df
-	# вычисляем InvC2 для положительных C, иначе NaN
-	c = pd.to_numeric(df['Capacitance_nF'], errors='coerce')
+	# вычисляем InvC2 для положительных C (в пФ), иначе NaN
+	c = pd.to_numeric(df['Capacitance_pF'], errors='coerce')
 	inv = pd.Series(np.nan, index=df.index)
 	mask_pos = c > 0.0
-	# переводим в 1/(мкФ^2): 1/(C_µF^2) = 1e6 / (C_nF^2)
+	# перевод в 1/(нФ^2): C_pF -> C_nF = C_pF / 1000; 1/(C_nF^2) = 1e6 / (C_pF^2)
 	inv.loc[mask_pos] = 1.0e6 / (c.loc[mask_pos] * c.loc[mask_pos])
 	df = df.copy()
 	df['InvC2'] = inv
@@ -119,27 +121,27 @@ def plot_inv_c2_and_save(df, meta, out_png_path):
 	plt.figure(figsize=(8,5))
 	plt.plot(df['Voltage_V'][mask_pos], df['InvC2'][mask_pos], marker='o', linestyle='-', color='tab:red')
 	title = make_title(meta, suffix_if_meta="1/C^2", default="1/C^2 vs V")
-	# подпись в мкФ^-2
-	save_figure(out_png_path, xlabel="Voltage (V)", ylabel=r"1 / C^2 (1 / мкФ$^2$)", title=title, legend=False, print_prefix="Saved")
+	# подпись в 1/нФ^2
+	save_figure(out_png_path, xlabel="Voltage (V)", ylabel=r"1 / C^2 (1 / нФ$^2$)", title=title, legend=False, print_prefix="Saved")
 	return df
 
 # Изменённая plot_dd_inv_c2_and_save: принимает df, вычисляет D2InvC2 и SmoothedD2InvC2, делает единственный фит гауссианой,
 # сохраняет PNG/CSV, добавляет столбцы Gauss_* и возвращает (df, gauss_params)
 def plot_dd_inv_c2_and_save(df, meta, out_png_path_png, out_csv_path):
-	# df must contain Voltage_V and Capacitance_nF; InvC2 may be present
-	if df is None or df.empty or 'Voltage_V' not in df.columns or 'Capacitance_nF' not in df.columns:
+	# df must contain Voltage_V and Capacitance_pF; InvC2 may be present
+	if df is None or df.empty or 'Voltage_V' not in df.columns or 'Capacitance_pF' not in df.columns:
 		print(f"Нет данных для анализа производной: {out_png_path_png}")
 		return df, None
 
 	df = df.copy()
 	v = pd.to_numeric(df['Voltage_V'], errors='coerce').to_numpy(dtype=float)
-	c = pd.to_numeric(df['Capacitance_nF'], errors='coerce').to_numpy(dtype=float)
+	c = pd.to_numeric(df['Capacitance_pF'], errors='coerce').to_numpy(dtype=float)
 
-	# inv_c2 (если ещё нет, вычисляем)
+	# inv_c2 (если ещё нет, вычисляем) — в 1/(нФ^2)
 	if 'InvC2' not in df.columns:
 		inv_c2 = np.full_like(c, np.nan, dtype=float)
 		mask_pos = c > 0.0
-		# перевод в 1/(мкФ^2)
+		# перевод: 1/(C_nF^2) = 1e6 / (C_pF^2)
 		inv_c2[mask_pos] = 1.0e6 / (c[mask_pos] * c[mask_pos])
 		df['InvC2'] = inv_c2
 	else:
@@ -259,7 +261,7 @@ def plot_dd_inv_c2_and_save(df, meta, out_png_path_png, out_csv_path):
 				pass
 
 		title = make_title(meta, suffix_if_meta="d(1/C^2)/dV (sigmoid fit)", default="d(1/C^2)/dV vs V")
-		save_figure(out_png_path_png, xlabel="Voltage (V)", ylabel=r"d(1/C^2)/dV (1 / мкФ$^2$ / V)", title=title, legend=True, print_prefix="Saved")
+		save_figure(out_png_path_png, xlabel="Voltage (V)", ylabel=r"d(1/C^2)/dV (1 / нФ$^2$ / V)", title=title, legend=True, print_prefix="Saved")
 	else:
 		print(f"Нет валидных точек для графика первой производной: {out_png_path_png}")
 
@@ -267,11 +269,12 @@ def plot_dd_inv_c2_and_save(df, meta, out_png_path_png, out_csv_path):
 	try:
 		with open(out_csv_path, 'w', newline='', encoding='utf-8') as csvfile:
 			writer = csv.writer(csvfile)
-			writer.writerow(['Voltage_V', 'Capacitance_nF', 'InvC2_1_per_uF2', 'D1InvC2', 'SmoothedD1InvC2', 'Sigmoid_A', 'Sigmoid_x0', 'Sigmoid_k', 'Sigmoid_y0'])
+			# Заголовок: 1/(нФ^2)
+			writer.writerow(['Voltage_V', 'Capacitance_pF', 'InvC2_1_per_nF2', 'D1InvC2', 'SmoothedD1InvC2', 'Sigmoid_A', 'Sigmoid_x0', 'Sigmoid_k', 'Sigmoid_y0'])
 			for _, row in df.iterrows():
 				writer.writerow([
 					f"{row['Voltage_V']:.6g}" if not pd.isna(row['Voltage_V']) else '',
-					f"{row['Capacitance_nF']:.6g}" if not pd.isna(row['Capacitance_nF']) else '',
+					f"{row['Capacitance_pF']:.6g}" if not pd.isna(row['Capacitance_pF']) else '',
 					f"{row['InvC2']:.12g}" if not pd.isna(row.get('InvC2', np.nan)) else '',
 					f"{row['D1InvC2']:.12g}" if not pd.isna(row.get('D1InvC2', np.nan)) else '',
 					f"{row['SmoothedD1InvC2']:.12g}" if not pd.isna(row.get('SmoothedD1InvC2', np.nan)) else '',
@@ -431,17 +434,17 @@ def analyze_inv_c2_and_save(df, meta, out_png_path, out_txt_path):
 	except Exception as e:
 		print(f"Не удалось сохранить {out_txt_path}: {e}")
 
-	# сохраняем график: левая ось — емкость C(V), правая ось — 1/C^2 с зонами и регрессиями
+	# сохраняем график: левая ось — емкость C(V) (пФ), правая ось — 1/C^2 (1/нФ^2) с зонами и регрессиями
 	try:
 		fig, ax1 = plt.subplots(figsize=(8,5))
 		# Левая ось: ёмкость
-		if 'Capacitance_nF' in df.columns:
-			c_vals = pd.to_numeric(df['Capacitance_nF'], errors='coerce').to_numpy(dtype=float)
+		if 'Capacitance_pF' in df.columns:
+			c_vals = pd.to_numeric(df['Capacitance_pF'], errors='coerce').to_numpy(dtype=float)
 		else:
 			c_vals = np.full_like(vc, np.nan, dtype=float)
-		ax1.plot(vc, c_vals, marker='o', linestyle='None', color='tab:blue', markersize=3, label='C (nF)')
+		ax1.plot(vc, c_vals, marker='o', linestyle='None', color='tab:blue', markersize=3, label='C (pF)')
 		ax1.set_xlabel("Напряжение (В)")
-		ax1.set_ylabel("Ёмкость (нФ)", color='tab:blue')
+		ax1.set_ylabel("Ёмкость (пФ)", color='tab:blue')
 		ax1.tick_params(axis='y', labelcolor='tab:blue')
 
 		# Добавить горизонтальную красную линию по последней валидной точке ёмкости
@@ -457,18 +460,18 @@ def analyze_inv_c2_and_save(df, meta, out_png_path, out_txt_path):
 					x_text = x1 - hor_offset
 					vert_offset = 0.02 * (y1 - y0) if np.isfinite(y1 - y0) else 0.1
 					y_text = last_c + abs(vert_offset)
-					ax1.text(x_text, y_text, f"{last_c:.3g} nF", color='blue', ha='right', va='bottom', fontsize=9)
+					ax1.text(x_text, y_text, f"{last_c:.3g} пФ", color='blue', ha='right', va='bottom', fontsize=9)
 				except Exception:
 					try:
-						ax1.text(0.95 * x1, last_c + 0.05 * (abs(last_c) + 1e-6), f"{last_c:.3g} nF", color='blue', ha='right', va='bottom', fontsize=9)
+						ax1.text(0.95 * x1, last_c + 0.05 * (abs(last_c) + 1e-6), f"{last_c:.3g} пФ", color='blue', ha='right', va='bottom', fontsize=9)
 					except Exception:
-						ax1.text(0, last_c, f"{last_c:.3g} nF", color='blue', ha='left', va='bottom', fontsize=9)
+						ax1.text(0, last_c, f"{last_c:.3g} пФ", color='blue', ha='left', va='bottom', fontsize=9)
 		except Exception:
 			pass
 
 		# Правая ось: 1/C^2
 		ax2 = ax1.twinx()
-		ax2.plot(vc, ic2, marker='o', linestyle='None', color='black', markersize=2, label=r'C$^{-2}$ (1/мкФ$^2$)')
+		ax2.plot(vc, ic2, marker='o', linestyle='None', color='black', markersize=2, label=r'C$^{-2}$ (1/нФ$^2$)')
 		# регрессии на правой оси
 		reg_color = 'tab:red'
 		reg_width = 1.5
@@ -499,7 +502,7 @@ def analyze_inv_c2_and_save(df, meta, out_png_path, out_txt_path):
 			if text_x < 0:
 				text_x = 0.0
 			text_y = ymin + 0.95 * (ymax - ymin)
-			ax2.text(text_x, text_y, f"{x_int:.1f} V", ha='left', va='bottom', color='red', fontsize=9)
+			ax2.text(text_x, text_y, f"{x_int:.1f} В", ha='left', va='bottom', color='red', fontsize=9)
 
 		# # показать границы переходной области
 		# try:
@@ -509,7 +512,7 @@ def analyze_inv_c2_and_save(df, meta, out_png_path, out_txt_path):
 		# 	pass
 
 		# подпись правой оси
-		ax2.set_ylabel(r"C$^{-2}$ (мкФ$^{-2}$)", color='black')
+		ax2.set_ylabel(r"C$^{-2}$ (нФ$^{-2}$)", color='black')
 		ax2.tick_params(axis='y', labelcolor='black')
 
 		# ограничение по X: от 0 до max измерений
@@ -527,7 +530,6 @@ def analyze_inv_c2_and_save(df, meta, out_png_path, out_txt_path):
 
 		# Уточнение tight_layout: резервируем немного места сверху для suptitle,
 		# чтобы не оставалось большого свободного пространства между графиком и заголовком.
-		# Параметр rect = [left, bottom, right, top] — уменьшаем top (0..1).
 		fig.tight_layout(rect=[0, 0, 1, 1.03])
 		fig.savefig(out_png_path, dpi=200)
 		plt.close(fig)
@@ -535,7 +537,7 @@ def analyze_inv_c2_and_save(df, meta, out_png_path, out_txt_path):
 	except Exception as e:
 		print(f"Ошибка при построении анализа png: {e}")
 
-# Обновлённый main: формируем DataFrame и передаём его в функции; корректируем вызовы
+# Обновлённый main: формируем DataFrame с Capacitance_pF и передаём его в функции; корректируем вызовы
 def main(root_dir):
 	if not os.path.isdir(root_dir):
 		print(f"Путь не найден: {root_dir}")
@@ -562,8 +564,8 @@ def main(root_dir):
 			if not folder_clean:
 				folder_clean = 'unknownDetector'
 
-			# создаём DataFrame и передаём дальше
-			df = pd.DataFrame({'Voltage_V': voltages, 'Capacitance_nF': caps})
+			# создаём DataFrame (емкость в пФ)
+			df = pd.DataFrame({'Voltage_V': voltages, 'Capacitance_pF': caps})
 
 			# первый график (оригинальный)
 			out_png1 = os.path.join(out_dir, f"1_{folder_clean}_{freq_clean}_VC.png")
