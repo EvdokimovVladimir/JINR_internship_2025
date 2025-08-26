@@ -8,7 +8,7 @@ from scipy.signal import savgol_filter
 from scipy.optimize import curve_fit
 
 # Добавленная константа ширины переходной зоны в сигмах (левая и правая)
-TRANSITION_WIDTH_SIGMA_LEFT = 1
+TRANSITION_WIDTH_SIGMA_LEFT = 3
 TRANSITION_WIDTH_SIGMA_RIGHT = 3
 
 def parse_cnc_file(path):
@@ -88,7 +88,7 @@ def save_figure(out_png_path, xlabel="Voltage (V)", ylabel=None, title=None, leg
 			pass
 	plt.tight_layout()
 	plt.savefig(out_png_path, dpi=200)
-	plt.show()
+	plt.close()
 	print(f"{print_prefix}: {out_png_path}")
 
 def plot_and_save(df, meta, out_png_path):
@@ -128,7 +128,7 @@ def plot_inv_c2_and_save(df, meta, out_png_path):
 def plot_dd_inv_c2_and_save(df, meta, out_png_path_png, out_csv_path):
 	# df must contain Voltage_V and Capacitance_nF; InvC2 may be present
 	if df is None or df.empty or 'Voltage_V' not in df.columns or 'Capacitance_nF' not in df.columns:
-		print(f"Нет данных для 2-й производной: {out_png_path_png}")
+		print(f"Нет данных для анализа производной: {out_png_path_png}")
 		return df, None
 
 	df = df.copy()
@@ -146,170 +146,150 @@ def plot_dd_inv_c2_and_save(df, meta, out_png_path_png, out_csv_path):
 		inv_c2 = pd.to_numeric(df['InvC2'], errors='coerce').to_numpy(dtype=float)
 		mask_pos = ~np.isnan(inv_c2)
 
-	# вторая производная по валидным точкам (внутри mask_pos)
-	dd = np.full_like(inv_c2, np.nan, dtype=float)
+	# ---------- НОВЫЙ АЛГОРИТМ: первая производная -> сглаживание -> фит убывающей сигмоиды ----------
+	d1 = np.full_like(inv_c2, np.nan, dtype=float)
+	smoothed_d1 = np.full_like(inv_c2, np.nan, dtype=float)
+	sigmoid_params = None
+
 	if np.count_nonzero(mask_pos) >= 3:
-		v_clean = v[mask_pos]
+		vc = v[mask_pos]
 		inv_clean = inv_c2[mask_pos]
 		try:
-			first = np.gradient(inv_clean, v_clean)
-			second = np.gradient(first, v_clean)
-			dd[mask_pos] = second
+			# первая производная
+			first = np.gradient(inv_clean, vc)
+			d1[mask_pos] = first
 		except Exception as e:
-			print(f"Ошибка при вычислении производных: {e}")
-	else:
-		print("Недостаточно положительных C для вычисления второй производной (нужно >=3).")
+			print(f"Ошибка при вычислении первой производной: {e}")
+			first = None
 
-	# Сглаживание второй производной (один раз здесь)
-	smoothed_dd = np.full_like(dd, np.nan, dtype=float)
-	valid_mask = mask_pos
-	valid_dd = dd[valid_mask]
-	num_valid = np.count_nonzero(valid_mask)
-	polyorder = 5
-	if num_valid > polyorder and np.any(~np.isnan(valid_dd)):
-		win = min(30, num_valid)
-		if win % 2 == 0:
-			win -= 1
-		if win <= polyorder:
-			cand = polyorder + 1
-			if cand % 2 == 0:
-				cand += 1
-			if cand <= num_valid:
-				win = cand
-			else:
-				win = None
-		if win is None:
-			smoothed_valid = valid_dd.copy()
-		else:
+		# сглаживание первой производной Savitzky-Golay
+		if first is not None:
 			try:
-				x = np.arange(len(valid_dd))
-				if np.any(np.isnan(valid_dd)):
-					good = ~np.isnan(valid_dd)
-					if np.count_nonzero(good) < 2:
-						smoothed_valid = valid_dd.copy()
-					else:
-						interp = np.interp(x, x[good], valid_dd[good])
-						smoothed_valid = savgol_filter(interp, window_length=win, polyorder=polyorder, mode='interp')
-				else:
-					smoothed_valid = savgol_filter(valid_dd, window_length=win, polyorder=polyorder, mode='interp')
+				num = first.size
+				win = min(31, num)
+				if win % 2 == 0:
+					win -= 1
+				if win < 5:
+					win = 5 if num >= 5 else (num if num%2==1 else num-1)
+				poly = 3 if win>3 else 2
+				interp = np.nan_to_num(first, nan=np.nanmedian(first) if np.any(~np.isnan(first)) else 0.0)
+				sm_first = savgol_filter(interp, window_length=max(3,win), polyorder=min(poly, max(1,win-1)), mode='interp')
 			except Exception as e:
-				print(f"Ошибка Savitzky-Golay: {e}")
-				smoothed_valid = valid_dd.copy()
-		smoothed_dd[valid_mask] = smoothed_valid
-	else:
-		# копируем необработанные при недостатке точек
-		if np.any(~np.isnan(valid_dd)):
-			smoothed_dd[valid_mask] = valid_dd.copy()
+				print(f"Ошибка при сглаживании первой производной: {e}")
+				sm_first = first.copy()
+			smoothed_d1[mask_pos] = sm_first
 
-	# Попытка подогнать гауссиану к сглаженной второй производной (единственный фит)
-	gauss_params = None
-	try:
-		vc = v[mask_pos]
-		sm = smoothed_dd[mask_pos]
-		valid_idx = np.where(~np.isnan(sm))[0]
-		if valid_idx.size >= 5:
-			idx_min_rel = int(np.nanargmin(sm))
-			win_pts = max(7, int(0.12 * valid_idx.size))
-			half = win_pts // 2
-			a = max(0, idx_min_rel - half)
-			b = min(len(sm), idx_min_rel + half + 1)
-			fx = vc[a:b]
-			fy = sm[a:b]
+			# Модель: убывающая сигмоида (самая сигмоида, а не её производная)
+			def logistic_dec(x, A, x0, k, y0):
+				# убывающая: высокий уровень слева -> низкий справа при k>0
+				return A / (1.0 + np.exp(k * (x - x0))) + y0
 
-			def gauss(x, A, x0, sigma, y0):
-				return A * np.exp(-0.5 * ((x - x0) / sigma) ** 2) + y0
-
-			y0_init = float(np.nanmedian(sm[valid_idx]))
-			A_init = float(np.nanmin(fy) - y0_init)
-			x0_init = float(vc[idx_min_rel])
-			if b - a > 1:
-				sigma_init = float((vc[b-1] - vc[a]) / 3.0)
-			else:
-				sigma_init = max(1.0, (vc.max() - vc.min()) * 0.02)
-			if sigma_init <= 0:
-				sigma_init = max(1.0, (vc.max() - vc.min()) * 0.02)
-			p0 = [A_init, x0_init, sigma_init, y0_init]
-			bounds = ([-np.inf, vc[a], 1e-6, -np.inf], [0.0, vc[b-1], (vc.max() - vc.min()), np.inf])
+			# начальные приближения для фита
 			try:
-				popt, _ = curve_fit(gauss, fx, fy, p0=p0, bounds=bounds, maxfev=10000)
-				gauss_params = tuple(map(float, popt))
-				print(f"Gaussian fit params (A, x0, sigma, y0): {gauss_params}")
+				A0 = float(np.nanmax(sm_first) - np.nanmin(sm_first)) if np.any(~np.isnan(sm_first)) else 1.0
+				# центр — точка максимального абсолютного значения сглаженной первой производной
+				idx0 = int(np.nanargmax(np.abs(sm_first)))
+				x0_0 = float(vc[idx0]) if 0 <= idx0 < vc.size else float(np.nanmedian(vc))
+				# k0 положителен; 1/k ~ ширина перехода, поэтому берем масштабовость данных
+				k0 = 1.0 / max(1e-6, (vc.max() - vc.min()) * 0.05)
+				y0_0 = float(np.nanmin(sm_first))  # нижний уровень как приближение
+				p0 = [A0, x0_0, k0, y0_0]
+				bounds = ([-np.inf, vc.min(), 1e-6, -np.inf], [np.inf, vc.max(), 1e3, np.inf])
+				try:
+					popt, _ = curve_fit(logistic_dec, vc, sm_first, p0=p0, bounds=bounds, maxfev=10000)
+					A_sig, x0_sig, k_sig, y0_sig = map(float, popt)
+					# Обеспечим k>0 (bounds уже гарантируют), A может быть положительным
+					sigmoid_params = (A_sig, x0_sig, k_sig, y0_sig)
+					# записываем параметры в df (построчно одинаковые)
+					df['Sigmoid_A'] = A_sig
+					df['Sigmoid_x0'] = x0_sig
+					df['Sigmoid_k'] = k_sig
+					df['Sigmoid_y0'] = y0_sig
+					print(f"Sigmoid fit params (A, x0, k, y0): {sigmoid_params}")
+				except Exception as e:
+					print(f"Sigmoid fit failed: {e}")
+					df['Sigmoid_A'] = np.nan
+					df['Sigmoid_x0'] = np.nan
+					df['Sigmoid_k'] = np.nan
+					df['Sigmoid_y0'] = np.nan
 			except Exception as e:
-				print(f"Gaussian fit failed: {e}")
-				gauss_params = None
+				print(f"Ошибка при подготовке фита сигмоиды: {e}")
+				df['Sigmoid_A'] = np.nan
+				df['Sigmoid_x0'] = np.nan
+				df['Sigmoid_k'] = np.nan
+				df['Sigmoid_y0'] = np.nan
 		else:
-			print("Недостаточно валидных точек для гауссианого фиттинга второй производной.")
-	except Exception as e:
-		print(f"Ошибка при подготовке гауссианного фитта: {e}")
-		gauss_params = None
-
-	# Добавляем столбцы в df
-	df['D2InvC2'] = dd
-	df['SmoothedD2InvC2'] = smoothed_dd
-	if gauss_params is not None:
-		A_fit, x0_fit, sigma_fit, y0_fit = gauss_params
-		df['Gauss_A'] = A_fit
-		df['Gauss_x0'] = x0_fit
-		df['Gauss_sigma'] = sigma_fit
-		df['Gauss_y0'] = y0_fit
+			df['Sigmoid_A'] = np.nan
+			df['Sigmoid_x0'] = np.nan
+			df['Sigmoid_k'] = np.nan
+			df['Sigmoid_y0'] = np.nan
 	else:
-		df['Gauss_A'] = np.nan
-		df['Gauss_x0'] = np.nan
-		df['Gauss_sigma'] = np.nan
-		df['Gauss_y0'] = np.nan
+		print("Недостаточно положительных C для вычисления первой производной (нужно >=3).")
+		df['Sigmoid_A'] = np.nan
+		df['Sigmoid_x0'] = np.nan
+		df['Sigmoid_k'] = np.nan
+		df['Sigmoid_y0'] = np.nan
 
-	# Сохраняем график второй производной (как раньше), используя рассчитанные массивы
-	if np.any(~np.isnan(dd)):
+	# Запись столбцов D1 и сглаженной D1
+	df['D1InvC2'] = d1
+	df['SmoothedD1InvC2'] = smoothed_d1
+
+	# Визуализация: первая производная и её сглаживание + фит убывающей сигмоиды (если есть)
+	if np.any(~np.isnan(d1)):
 		plt.figure(figsize=(8,5))
-		plt.plot(v[mask_pos], dd[mask_pos], marker='o', linestyle='None', color='tab:green', label='D2(1/C^2) raw')
-		if np.any(~np.isnan(smoothed_dd[mask_pos])):
-			plt.plot(v[mask_pos], smoothed_dd[mask_pos], linestyle='-', color='tab:orange', linewidth=2, label='D2(1/C^2) smooth')
-		if gauss_params is not None:
-			A_fit, x0_fit, sigma_fit, y0_fit = gauss_params
+		if np.any(~np.isnan(d1[mask_pos])):
+			plt.plot(v[mask_pos], d1[mask_pos], marker='o', linestyle='None', color='tab:green', label='D1(1/C^2) raw')
+		if np.any(~np.isnan(smoothed_d1[mask_pos])):
+			plt.plot(v[mask_pos], smoothed_d1[mask_pos], linestyle='-', color='tab:orange', linewidth=2, label='D1(1/C^2) smooth')
+		if sigmoid_params is not None:
+			A_sig, x0_sig, k_sig, y0_sig = sigmoid_params
 			xs = np.linspace(v[mask_pos].min(), v[mask_pos].max(), 400)
-			def gauss_full(x): return A_fit * np.exp(-0.5 * ((x - x0_fit) / sigma_fit) ** 2) + y0_fit
-			ys = gauss_full(xs)
-			plt.plot(xs, ys, linestyle='--', color='red', linewidth=1.5, label='Gaussian fit (smooth D2)')
-			plt.axvline(x=x0_fit, color='red', linestyle='--', linewidth=1)
-			plt.axvline(x=x0_fit - TRANSITION_WIDTH_SIGMA_LEFT * sigma_fit, color='red', linestyle=':', linewidth=1)
-			plt.axvline(x=x0_fit + TRANSITION_WIDTH_SIGMA_RIGHT * sigma_fit, color='red', linestyle=':', linewidth=1)
-			plt.annotate(f"x0={x0_fit:.3g}\nsigma={sigma_fit:.3g}", xy=(x0_fit, y0_fit), xytext=(5,5),
-						textcoords='offset points', fontsize=8, color='red')
-		title = make_title(meta, suffix_if_meta="d2(1/C^2)/dV^2", default="d2(1/C^2)/dV^2 vs V")
-		# подпись в мкФ^-2 / V^2
-		save_figure(out_png_path_png, xlabel="Voltage (V)", ylabel=r"d2(1/C^2)/dV^2 (1 / мкФ$^2$ / V$^2$)",
-					title=title, legend=True, print_prefix="Saved")
-	else:
-		print(f"Нет валидных точек для графика второй производной: {out_png_path_png}")
+			def logistic_full(x):
+				return A_sig / (1.0 + np.exp(k_sig * (x - x0_sig))) + y0_sig
+			plt.plot(xs, logistic_full(xs), linestyle='--', color='purple', linewidth=1.5, label='Fitted decreasing sigmoid')
+			plt.axvline(x=x0_sig, color='purple', linestyle='--', linewidth=1)
+			# показать границы переходной области по параметрам сигмоиды
+			try:
+				sigma_est = 1.0 / k_sig if k_sig != 0 else (v[mask_pos].max() - v[mask_pos].min())*0.02
+				plt.axvline(x=x0_sig - TRANSITION_WIDTH_SIGMA_LEFT * sigma_est, color='purple', linestyle=':', linewidth=1)
+				plt.axvline(x=x0_sig + TRANSITION_WIDTH_SIGMA_RIGHT * sigma_est, color='purple', linestyle=':', linewidth=1)
+				plt.annotate(f"x0={x0_sig:.3g}\nk={k_sig:.3g}", xy=(x0_sig, y0_sig), xytext=(5,5),
+							textcoords='offset points', fontsize=8, color='purple')
+			except Exception:
+				pass
 
-	# Сохраняем CSV с новыми столбцами
+		title = make_title(meta, suffix_if_meta="d(1/C^2)/dV (sigmoid fit)", default="d(1/C^2)/dV vs V")
+		save_figure(out_png_path_png, xlabel="Voltage (V)", ylabel=r"d(1/C^2)/dV (1 / мкФ$^2$ / V)", title=title, legend=True, print_prefix="Saved")
+	else:
+		print(f"Нет валидных точек для графика первой производной: {out_png_path_png}")
+
+	# Сохраняем CSV с новыми столбцами (включая параметры сигмоида)
 	try:
 		with open(out_csv_path, 'w', newline='', encoding='utf-8') as csvfile:
 			writer = csv.writer(csvfile)
-			# поменял заголовок столбца InvC2 на единицы мкФ^-2
-			writer.writerow(['Voltage_V', 'Capacitance_nF', 'InvC2_1_per_uF2', 'D2InvC2', 'SmoothedD2InvC2', 'Gauss_A', 'Gauss_x0', 'Gauss_sigma', 'Gauss_y0'])
+			writer.writerow(['Voltage_V', 'Capacitance_nF', 'InvC2_1_per_uF2', 'D1InvC2', 'SmoothedD1InvC2', 'Sigmoid_A', 'Sigmoid_x0', 'Sigmoid_k', 'Sigmoid_y0'])
 			for _, row in df.iterrows():
 				writer.writerow([
 					f"{row['Voltage_V']:.6g}" if not pd.isna(row['Voltage_V']) else '',
 					f"{row['Capacitance_nF']:.6g}" if not pd.isna(row['Capacitance_nF']) else '',
 					f"{row['InvC2']:.12g}" if not pd.isna(row.get('InvC2', np.nan)) else '',
-					f"{row['D2InvC2']:.12g}" if not pd.isna(row.get('D2InvC2', np.nan)) else '',
-					f"{row['SmoothedD2InvC2']:.12g}" if not pd.isna(row.get('SmoothedD2InvC2', np.nan)) else '',
-					f"{row['Gauss_A']:.12g}" if not pd.isna(row.get('Gauss_A', np.nan)) else '',
-					f"{row['Gauss_x0']:.12g}" if not pd.isna(row.get('Gauss_x0', np.nan)) else '',
-					f"{row['Gauss_sigma']:.12g}" if not pd.isna(row.get('Gauss_sigma', np.nan)) else '',
-					f"{row['Gauss_y0']:.12g}" if not pd.isna(row.get('Gauss_y0', np.nan)) else ''
+					f"{row['D1InvC2']:.12g}" if not pd.isna(row.get('D1InvC2', np.nan)) else '',
+					f"{row['SmoothedD1InvC2']:.12g}" if not pd.isna(row.get('SmoothedD1InvC2', np.nan)) else '',
+					f"{row['Sigmoid_A']:.12g}" if not pd.isna(row.get('Sigmoid_A', np.nan)) else '',
+					f"{row['Sigmoid_x0']:.12g}" if not pd.isna(row.get('Sigmoid_x0', np.nan)) else '',
+					f"{row['Sigmoid_k']:.12g}" if not pd.isna(row.get('Sigmoid_k', np.nan)) else '',
+					f"{row['Sigmoid_y0']:.12g}" if not pd.isna(row.get('Sigmoid_y0', np.nan)) else ''
 				])
 		print(f"Saved CSV: {out_csv_path}")
 	except Exception as e:
 		print(f"Не удалось сохранить CSV {out_csv_path}: {e}")
 
-	return df, gauss_params
+	return df, sigmoid_params
 
 # analyze_inv_c2_and_save теперь принимает DataFrame и использует ранее посчитанные столбцы (не выполняет повторного сглаживания/фитта)
 def analyze_inv_c2_and_save(df, meta, out_png_path, out_txt_path):
 	"""
-	Анализ 1/C^2 vs V. Использует столбцы InvC2, D2InvC2, SmoothedD2InvC2 и при наличии Gauss_*.
+	Анализ 1/C^2 vs V. Использует столбцы InvC2, D1InvC2, SmoothedD1InvC2 и при наличии Sigmoid_*.
 	"""
 	if df is None or df.empty or 'Voltage_V' not in df.columns or 'InvC2' not in df.columns:
 		print(f"Недостаточно данных для анализа: {out_png_path}")
@@ -319,48 +299,47 @@ def analyze_inv_c2_and_save(df, meta, out_png_path, out_txt_path):
 	ic2 = pd.to_numeric(df['InvC2'], errors='coerce').to_numpy(dtype=float)
 	n = len(vc)
 
-	# Если есть значения SmoothedD2InvC2 и Gauss параметры, используем их
+	# Сглаженная первая производная при наличии
 	smoothed = None
-	if 'SmoothedD2InvC2' in df.columns:
-		smoothed = pd.to_numeric(df['SmoothedD2InvC2'], errors='coerce').to_numpy(dtype=float)
+	if 'SmoothedD1InvC2' in df.columns:
+		smoothed = pd.to_numeric(df['SmoothedD1InvC2'], errors='coerce').to_numpy(dtype=float)
 
-	# попытка взять параметры гаусса из колонок
-	x0_fit = None; sigma_fit = None
-	if 'Gauss_x0' in df.columns and 'Gauss_sigma' in df.columns:
-		gx0 = df['Gauss_x0'].dropna()
-		gsig = df['Gauss_sigma'].dropna()
-		if not gx0.empty and not gsig.empty:
-			# взять первое непустое значение
-			x0_fit = float(gx0.iloc[0]); sigma_fit = float(gsig.iloc[0])
+	# Попытка взять параметры сигмоиды из колонок
+	x0_fit = None; k_fit = None
+	if 'Sigmoid_x0' in df.columns and 'Sigmoid_k' in df.columns:
+		gx0 = df['Sigmoid_x0'].dropna()
+		gk = df['Sigmoid_k'].dropna()
+		if not gx0.empty and not gk.empty:
+			x0_fit = float(gx0.iloc[0])
+			k_fit = float(gk.iloc[0])
 
-	# Если гаусс найден — используем center +/- TRANSITION_WIDTH_SIGMA_LEFT/RIGHT * sigma
-	if x0_fit is not None and sigma_fit is not None:
-		left_bound = x0_fit - float(TRANSITION_WIDTH_SIGMA_LEFT) * sigma_fit
-		right_bound = x0_fit + float(TRANSITION_WIDTH_SIGMA_RIGHT) * sigma_fit
+	# Если сигмоида найдена — используем center +/- TRANSITION_WIDTH_SIGMA_LEFT/RIGHT * sigma (sigma = 1/k)
+	if x0_fit is not None and k_fit is not None and k_fit != 0:
+		sigma_est = 1.0 / k_fit
+		left_bound = x0_fit - float(TRANSITION_WIDTH_SIGMA_LEFT) * sigma_est
+		right_bound = x0_fit + float(TRANSITION_WIDTH_SIGMA_RIGHT) * sigma_est
 	else:
-		# fallback: если есть смoothed, найдём минимум и оценим sigma примерно через ширину на полувысоте
+		# fallback: если есть смoothed первой производной, найдём максимум абсолютного изменения (пик) и оценим sigma через ширину на полувысоте
 		if smoothed is not None and not np.all(np.isnan(smoothed)):
-			idx_min = int(np.nanargmin(smoothed))
-			# простая оценка sigma через локальную ширину
+			idx_peak = int(np.nanargmax(np.abs(smoothed)))
 			try:
-				miny = np.nanmin(smoothed)
+				peak_val = smoothed[idx_peak]
 				y0_est = np.nanmedian(smoothed[~np.isnan(smoothed)])
-				half_level = (miny + y0_est) / 2.0
-				# найдём ближайшие пересечения вокруг idx_min
-				left_rel = np.where(smoothed[:idx_min] <= half_level)[0]
-				right_rel = np.where(smoothed[idx_min:] <= half_level)[0]
+				half_level = (abs(peak_val) + abs(y0_est)) / 2.0
+				# упрощённый поиск пересечений по абсолютному уровню
+				left_rel = np.where(np.abs(smoothed[:idx_peak]) >= half_level)[0]
+				right_rel = np.where(np.abs(smoothed[idx_peak:]) >= half_level)[0]
 				if left_rel.size>0 and right_rel.size>0:
-					left_idx = left_rel[-1]
-					right_idx = idx_min + right_rel[0]
+					left_idx = left_rel[0]
+					right_idx = idx_peak + right_rel[-1]
 					fwhm = vc[right_idx] - vc[left_idx] if right_idx>left_idx else (vc.max()-vc.min())
 					sigma_fit = fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0))) if fwhm>0 else max(1.0, (vc.max()-vc.min())*0.02)
 				else:
 					sigma_fit = max(1.0, (vc.max()-vc.min())*0.02)
-				x0_fit = vc[idx_min]
+				x0_fit = vc[idx_peak]
 				left_bound = x0_fit - float(TRANSITION_WIDTH_SIGMA_LEFT) * sigma_fit
 				right_bound = x0_fit + float(TRANSITION_WIDTH_SIGMA_RIGHT) * sigma_fit
 			except Exception:
-				# final fallback — деление по 40/60%
 				left_bound = vc[0]
 				right_bound = vc[-1]
 		else:
@@ -369,7 +348,6 @@ def analyze_inv_c2_and_save(df, meta, out_png_path, out_txt_path):
 			right_bound = vc[-1] if n>0 else 0.0
 
 	# Теперь определяем индексы зон и выполняем регрессии (аналогично прежней логике)
-	# определяем индексы зон по границам
 	try:
 		l_idx = np.where(vc <= left_bound)[0]
 		r_idx = np.where(vc >= right_bound)[0]
@@ -379,9 +357,9 @@ def analyze_inv_c2_and_save(df, meta, out_png_path, out_txt_path):
 
 	# fallback при недостатке точек
 	if l_idx.size < 2 or r_idx.size < 2:
-		# разделение по позиции минимума smoothed или по середине
+		# разделение по позиции пика smoothed или по середине
 		if smoothed is not None and not np.all(np.isnan(smoothed)):
-			mid = int(np.nanargmin(smoothed))
+			mid = int(np.nanargmax(np.abs(smoothed)))
 		else:
 			mid = n//2
 		l_s = 0
@@ -436,7 +414,7 @@ def analyze_inv_c2_and_save(df, meta, out_png_path, out_txt_path):
 	lines.append("")
 	lines.append(f"Left linear zone indices: {l_s}..{l_e}, Voltages: {left_zone[0]:.6g} .. {left_zone[1]:.6g}")
 	lines.append(f"Right linear zone indices: {r_s}..{r_e}, Voltages: {right_zone[0]:.6g} .. {right_zone[1]:.6g}")
-	lines.append(f"Transition zone voltages ({TRANSITION_WIDTH_SIGMA_LEFT}σ left / {TRANSITION_WIDTH_SIGMA_RIGHT}σ right around gaussian center): {transition_zone[0]:.6g} .. {transition_zone[1]:.6g}")
+	lines.append(f"Transition zone voltages ({TRANSITION_WIDTH_SIGMA_LEFT}σ left / {TRANSITION_WIDTH_SIGMA_RIGHT}σ right around sigmoid center): {transition_zone[0]:.6g} .. {transition_zone[1]:.6g}")
 	lines.append("")
 	lines.append(f"Left line: y = {lm:.6g} * x + {lb:.6g}   (R2={lr2:.6g})")
 	lines.append(f"Right line: y = {rm:.6g} * x + {rb:.6g}   (R2={rr2:.6g})")
@@ -471,22 +449,16 @@ def analyze_inv_c2_and_save(df, meta, out_png_path, out_txt_path):
 			valid_idx_c = np.where(~np.isnan(c_vals))[0]
 			if valid_idx_c.size > 0:
 				last_c = float(c_vals[valid_idx_c[-1]])
-				# горизонтальная линия по всему графику (красная)
 				ax1.axhline(y=last_c, color='red', linestyle='-', linewidth=1)
-				# подпись справа-влево и выше линии (маленький отступ от правой границы и немного выше)
 				try:
 					x0, x1 = ax1.get_xlim()
 					y0, y1 = ax1.get_ylim()
-					# горизонтальный отступ: 5% от ширины оси
 					hor_offset = 0.05 * (x1 - x0) if np.isfinite(x1 - x0) else 0.5
 					x_text = x1 - hor_offset
-					# вертикальный отступ: 2% от высоты оси (над линией)
 					vert_offset = 0.02 * (y1 - y0) if np.isfinite(y1 - y0) else 0.1
 					y_text = last_c + abs(vert_offset)
-					# разместить текст над линией и левее (якорь справа -> текст тянется влево от x_text)
 					ax1.text(x_text, y_text, f"{last_c:.3g} nF", color='blue', ha='right', va='bottom', fontsize=9)
 				except Exception:
-					# fallback: чуть выше и слева от начала оси
 					try:
 						ax1.text(0.95 * x1, last_c + 0.05 * (abs(last_c) + 1e-6), f"{last_c:.3g} nF", color='blue', ha='right', va='bottom', fontsize=9)
 					except Exception:
@@ -497,8 +469,6 @@ def analyze_inv_c2_and_save(df, meta, out_png_path, out_txt_path):
 		# Правая ось: 1/C^2
 		ax2 = ax1.twinx()
 		ax2.plot(vc, ic2, marker='o', linestyle='None', color='black', markersize=2, label=r'C$^{-2}$ (1/мкФ$^2$)')
-		# зоны по правой оси
-		# ax2.axvspan(left_zone[1], right_zone[0], color='black', alpha=0.12)
 		# регрессии на правой оси
 		reg_color = 'tab:red'
 		reg_width = 1.5
@@ -518,7 +488,6 @@ def analyze_inv_c2_and_save(df, meta, out_png_path, out_txt_path):
 		if intersection is not None:
 			x_int = intersection[0]
 			ax2.axvline(x=x_int, color='red', linestyle='-', linewidth=1)
-			# подпись рядом с осью
 			ymin, ymax = ax2.get_ylim()
 			try:
 				vc_min = float(np.nanmin(vc))
@@ -531,6 +500,13 @@ def analyze_inv_c2_and_save(df, meta, out_png_path, out_txt_path):
 				text_x = 0.0
 			text_y = ymin + 0.95 * (ymax - ymin)
 			ax2.text(text_x, text_y, f"{x_int:.1f} V", ha='left', va='bottom', color='red', fontsize=9)
+
+		# # показать границы переходной области
+		# try:
+		# 	ax2.axvline(x=left_bound, color='purple', linestyle=':', linewidth=1)
+		# 	ax2.axvline(x=right_bound, color='purple', linestyle=':', linewidth=1)
+		# except Exception:
+		# 	pass
 
 		# подпись правой оси
 		ax2.set_ylabel(r"C$^{-2}$ (мкФ$^{-2}$)", color='black')
@@ -549,12 +525,12 @@ def analyze_inv_c2_and_save(df, meta, out_png_path, out_txt_path):
 		title = make_title(meta, suffix_if_meta="", default="1/C^2 vs V analysis")
 		fig.suptitle(title)
 
-		# Уберём легенды (не выводим)
-		# ...не вызываем ax.legend()...
-
-		fig.tight_layout(rect=[0,0,1,0.96])
+		# Уточнение tight_layout: резервируем немного места сверху для suptitle,
+		# чтобы не оставалось большого свободного пространства между графиком и заголовком.
+		# Параметр rect = [left, bottom, right, top] — уменьшаем top (0..1).
+		fig.tight_layout(rect=[0, 0, 1, 1.03])
 		fig.savefig(out_png_path, dpi=200)
-		plt.show(fig)
+		plt.close(fig)
 		print(f"Saved analysis png: {out_png_path}")
 	except Exception as e:
 		print(f"Ошибка при построении анализа png: {e}")
@@ -597,10 +573,10 @@ def main(root_dir):
 			out_png2 = os.path.join(out_dir, f"2_{folder_clean}_{freq_clean}_VC2.png")
 			df = plot_inv_c2_and_save(df, meta, out_png2)
 
-			# третий график: вторая производная и CSV (возвращает df и gauss_params)
-			out_png3 = os.path.join(out_dir, f"3_{folder_clean}_{freq_clean}_VddC2.png")
+			# третий график: первая производная + сигмоида и CSV (возвращает df и sigmoid_params)
+			out_png3 = os.path.join(out_dir, f"3_{folder_clean}_{freq_clean}_D1C2.png")
 			out_csv = os.path.join(out_dir, f"{folder_clean}_{freq_clean}_VC_table.csv")
-			df, gauss_params = plot_dd_inv_c2_and_save(df, meta, out_png3, out_csv)
+			df, sigmoid_params = plot_dd_inv_c2_and_save(df, meta, out_png3, out_csv)
 
 			# Четвёртый: анализ линейных участков и переходной зоны + txt
 			out_png4 = os.path.join(out_dir, f"4_{folder_clean}_{freq_clean}_analysys.png")
